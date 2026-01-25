@@ -184,32 +184,72 @@ impl Default for Config {
     }
 }
 
-/// Log watch configuration for AI-based status analysis
+/// Log watch configuration for CLI status tracking
+///
+/// ## Architecture
+/// - Claude Code: Event-driven via hooks (no AI analysis, no polling)
+/// - Kiro CLI: SQLite polling (no hooks needed, reads from database)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogWatchConfig {
     /// Enable log watching and analysis
     #[serde(default = "default_logwatch_enabled")]
     pub enabled: bool,
-    /// CLI tool to use for analysis ("claude" or "kiro")
+
+    // === Claude Code Settings ===
+    /// Enable Claude Code hooks integration
+    #[serde(default = "default_claude_hooks_enabled")]
+    pub claude_hooks_enabled: bool,
+    /// Claude home directory (for log reading if needed)
+    #[serde(default = "default_claude_home")]
+    pub claude_home: PathBuf,
+
+    // === Kiro CLI Settings ===
+    /// Enable Kiro CLI SQLite polling
+    #[serde(default = "default_kiro_polling_enabled")]
+    pub kiro_polling_enabled: bool,
+    /// Kiro polling interval in seconds
+    #[serde(default = "default_kiro_polling_interval")]
+    pub kiro_polling_interval_secs: u64,
+    /// Path to Kiro CLI SQLite database
+    #[serde(default = "default_kiro_db_path")]
+    pub kiro_db_path: PathBuf,
+
+    // === Legacy Settings (for backwards compatibility) ===
+    /// CLI tool to use for analysis ("claude" or "kiro") - DEPRECATED
     #[serde(default = "default_analyzer_tool")]
     pub analyzer_tool: String,
-    /// Interval between analyses in seconds
+    /// Interval between analyses in seconds - DEPRECATED, use kiro_polling_interval_secs
     #[serde(default = "default_analysis_interval")]
     pub analysis_interval_secs: u64,
     /// Maximum log lines to analyze
     #[serde(default = "default_max_log_lines")]
     pub max_log_lines: usize,
-    /// Claude home directory
-    #[serde(default = "default_claude_home")]
-    pub claude_home: PathBuf,
-    /// Kiro logs directory (optional)
+    /// Kiro logs directory (optional) - DEPRECATED, use kiro_db_path
     pub kiro_logs_dir: Option<PathBuf>,
-    /// Use heuristic analysis instead of AI (for testing/offline)
+    /// Use heuristic analysis instead of AI (for testing/offline) - DEPRECATED
     #[serde(default)]
     pub use_heuristic: bool,
-    /// Enable periodic polling (can be disabled to use only event-driven triggers)
+    /// Enable periodic polling - DEPRECATED, use kiro_polling_enabled
     #[serde(default = "default_polling_enabled")]
     pub polling_enabled: bool,
+}
+
+fn default_claude_hooks_enabled() -> bool {
+    true
+}
+
+fn default_kiro_polling_enabled() -> bool {
+    true
+}
+
+fn default_kiro_polling_interval() -> u64 {
+    10 // Poll every 10 seconds
+}
+
+fn default_kiro_db_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("Library/Application Support/kiro-cli/data.sqlite3")
 }
 
 fn default_polling_enabled() -> bool {
@@ -217,7 +257,7 @@ fn default_polling_enabled() -> bool {
 }
 
 fn default_logwatch_enabled() -> bool {
-    false // Disabled by default to avoid API costs
+    true // Enabled by default (no API costs with new architecture)
 }
 
 fn default_analyzer_tool() -> String {
@@ -225,7 +265,7 @@ fn default_analyzer_tool() -> String {
 }
 
 fn default_analysis_interval() -> u64 {
-    10 // Analyze every 10 seconds
+    10
 }
 
 fn default_max_log_lines() -> usize {
@@ -242,7 +282,7 @@ impl Default for LogWatchConfig {
     fn default() -> Self {
         let claude_home = default_claude_home();
 
-        // Kiro logs on macOS
+        // Kiro logs on macOS (legacy)
         let kiro_logs_dir = if cfg!(target_os = "macos") {
             dirs::home_dir().map(|h| {
                 h.join("Library/Application Support/Kiro/logs/kiroAgent")
@@ -253,10 +293,17 @@ impl Default for LogWatchConfig {
 
         Self {
             enabled: default_logwatch_enabled(),
+            // Claude Code settings
+            claude_hooks_enabled: default_claude_hooks_enabled(),
+            claude_home,
+            // Kiro CLI settings
+            kiro_polling_enabled: default_kiro_polling_enabled(),
+            kiro_polling_interval_secs: default_kiro_polling_interval(),
+            kiro_db_path: default_kiro_db_path(),
+            // Legacy settings
             analyzer_tool: default_analyzer_tool(),
             analysis_interval_secs: default_analysis_interval(),
             max_log_lines: default_max_log_lines(),
-            claude_home,
             kiro_logs_dir,
             use_heuristic: false,
             polling_enabled: default_polling_enabled(),

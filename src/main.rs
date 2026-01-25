@@ -13,7 +13,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
-use workspace_manager::logwatch::{LogAnalyzer, LogCollector, collector::CollectorConfig, analyzer::AnalyzerConfig};
+use workspace_manager::logwatch::{KiroSqliteConfig, KiroSqliteFetcher};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::InputDialogKind;
@@ -198,18 +198,22 @@ fn run_tui() -> Result<()> {
         }
     });
 
-    // Start log watcher if enabled (event-driven)
+    // Start log watcher if enabled (event-driven for Claude Code, polling for Kiro CLI)
+    // Create watch channel to share workspace list with logwatch service
+    let (workspace_watch_tx, workspace_watch_rx) = tokio::sync::watch::channel::<Vec<String>>(Vec::new());
     let logwatch_trigger: Option<LogWatchTrigger> = if config.logwatch.enabled {
         let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<String>(100);
         let logwatch_tx = notify_tx.clone();
         let logwatch_config = config.logwatch.clone();
         runtime.spawn(async move {
-            run_logwatch(logwatch_config, logwatch_tx, trigger_rx).await;
+            run_logwatch(logwatch_config, logwatch_tx, trigger_rx, workspace_watch_rx).await;
         });
         Some(trigger_tx)
     } else {
         None
     };
+    // Keep workspace_watch_tx for updating workspace list
+    let workspace_watch_tx = if config.logwatch.enabled { Some(workspace_watch_tx) } else { None };
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -223,7 +227,7 @@ fn run_tui() -> Result<()> {
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx, logwatch_trigger, &runtime);
+    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx, logwatch_trigger, workspace_watch_tx, &runtime);
 
     // Clean up socket on exit
     let socket_path = notify::socket_path();
@@ -240,153 +244,93 @@ fn run_tui() -> Result<()> {
     result
 }
 
-/// Log analyzer that can be triggered on-demand
-struct LogWatchService {
-    collector: LogCollector,
-    analyzer: LogAnalyzer,
-    use_ai: bool,
-    tx: tokio::sync::mpsc::Sender<AppEvent>,
-}
+/// Simple Claude Code status service (hooks-based, no AI analysis)
+///
+/// Note: Claude Code hooks already provide working/idle status via NotifyMessage,
+/// so this service is primarily for logging/debugging purposes.
+/// The actual status updates come through the notify channel (AppEvent::WorkspaceUpdate).
+struct ClaudeStatusService;
 
-impl LogWatchService {
-    async fn new(
-        config: workspace_manager::app::LogWatchConfig,
-        tx: tokio::sync::mpsc::Sender<AppEvent>,
-    ) -> Self {
-        let collector_config = CollectorConfig {
-            claude_home: config.claude_home.clone(),
-            kiro_logs_dir: config.kiro_logs_dir.clone(),
-            max_lines: config.max_log_lines,
-            scan_interval_secs: config.analysis_interval_secs,
-            min_file_age_secs: 1,
-        };
-
-        let analyzer_config = AnalyzerConfig {
-            analyzer_tool: config.analyzer_tool.clone(),
-            timeout_secs: 30,
-            max_content_length: 50000,
-        };
-
-        let collector = LogCollector::new(collector_config);
-        let analyzer = LogAnalyzer::new(analyzer_config);
-
-        // Check if analyzer is available
-        let use_ai = !config.use_heuristic && analyzer.is_available().await;
-        if !use_ai {
-            tracing::info!("Using heuristic analysis (AI analyzer not available or disabled)");
-        }
-
-        Self {
-            collector,
-            analyzer,
-            use_ai,
-            tx,
-        }
+impl ClaudeStatusService {
+    fn new(_tx: tokio::sync::mpsc::Sender<AppEvent>) -> Self {
+        Self
     }
 
-    /// Analyze logs for a specific project path (triggered by hooks)
-    async fn analyze_for_project(&mut self, project_path: &str) {
-        use workspace_manager::logwatch::analyzer::extract_status_heuristic;
-
-        tracing::info!("Analyzing logs for project: {}", project_path);
-
-        // Use read_for_project for direct access (event-driven)
-        match self.collector.read_for_project(project_path) {
-            Ok(Some(log)) => {
-                tracing::info!("Found log with {} lines", log.lines.len());
-
-                let status = if self.use_ai {
-                    match self.analyzer.analyze(&log).await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!("AI analysis failed, using heuristic: {}", e);
-                            extract_status_heuristic(&log)
-                        }
-                    }
-                } else {
-                    extract_status_heuristic(&log)
-                };
-
-                tracing::info!("Analysis result: status={:?}, summary={:?}",
-                    status.status, status.summary);
-
-                let event = AppEvent::WorkspaceStatusAnalyzed {
-                    project_path: project_path.to_string(),
-                    status,
-                };
-                if self.tx.send(event).await.is_err() {
-                    tracing::warn!("Event receiver dropped");
-                }
-            }
-            Ok(None) => {
-                tracing::info!("No logs found for project: {}", project_path);
-            }
-            Err(e) => {
-                tracing::warn!("Log read error: {}", e);
-            }
-        }
+    /// Handle Claude Code status update trigger from hooks
+    async fn handle_trigger(&self, project_path: &str) {
+        tracing::debug!("Claude Code status trigger for: {}", project_path);
+        // No additional processing needed - hooks provide status directly via NotifyMessage
     }
 }
 
 /// Channel for triggering log analysis
 type LogWatchTrigger = tokio::sync::mpsc::Sender<String>;
 
-/// Run log watcher service that responds to triggers and does periodic polling
+/// Run log watcher service with new architecture:
+/// - Claude Code: hooks-based (event-driven, no AI analysis)
+/// - Kiro CLI: SQLite polling (reads status from database)
 async fn run_logwatch(
     config: workspace_manager::app::LogWatchConfig,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
     mut trigger_rx: tokio::sync::mpsc::Receiver<String>,
+    workspace_rx: tokio::sync::watch::Receiver<Vec<String>>,
 ) {
-    use workspace_manager::logwatch::analyzer::extract_status_heuristic;
+    tracing::info!(
+        "Log watch service started (Claude hooks: {}, Kiro polling: {})",
+        config.claude_hooks_enabled,
+        config.kiro_polling_enabled
+    );
 
-    let mut service = LogWatchService::new(config.clone(), tx.clone()).await;
-    let poll_interval = Duration::from_secs(config.analysis_interval_secs);
-
-    if config.polling_enabled {
-        tracing::info!("Log watch service started (hybrid mode: events + polling every {}s)", config.analysis_interval_secs);
+    // Claude Code: hooks-based service (no polling, no AI)
+    let claude_service = if config.claude_hooks_enabled {
+        Some(ClaudeStatusService::new(tx.clone()))
     } else {
-        tracing::info!("Log watch service started (event-driven only, polling disabled)");
-    }
+        None
+    };
 
-    // Spawn polling task only if enabled
-    let polling_handle = if config.polling_enabled {
+    // Kiro CLI: SQLite polling task
+    let kiro_polling_handle = if config.kiro_polling_enabled {
+        let kiro_config = KiroSqliteConfig {
+            db_path: config.kiro_db_path.clone(),
+            timeout_secs: 5,
+        };
+        let kiro_fetcher = KiroSqliteFetcher::with_config(kiro_config);
+        let poll_interval = Duration::from_secs(config.kiro_polling_interval_secs);
         let poll_tx = tx.clone();
-        let poll_config = config.clone();
+        let mut poll_workspace_rx = workspace_rx.clone();
+
         Some(tokio::spawn(async move {
-            let collector_config = CollectorConfig {
-                claude_home: poll_config.claude_home.clone(),
-                kiro_logs_dir: poll_config.kiro_logs_dir.clone(),
-                max_lines: poll_config.max_log_lines,
-                scan_interval_secs: poll_config.analysis_interval_secs,
-                min_file_age_secs: 1,
-            };
-            let mut collector = LogCollector::new(collector_config);
+            if !kiro_fetcher.is_available() {
+                tracing::info!("Kiro database not found at {:?}, polling disabled", kiro_fetcher.db_path());
+                return;
+            }
+
+            tracing::info!(
+                "Kiro SQLite polling started (interval: {}s, db: {:?})",
+                poll_interval.as_secs(),
+                kiro_fetcher.db_path()
+            );
 
             loop {
                 tokio::time::sleep(poll_interval).await;
 
-                match collector.scan() {
-                    Ok(logs) => {
-                        for log in logs {
-                            let project_path = log.project_path.clone().unwrap_or_default();
-                            if project_path.is_empty() {
-                                continue;
-                            }
+                // Get current workspace list
+                let workspaces = poll_workspace_rx.borrow_and_update().clone();
 
-                            let status = extract_status_heuristic(&log);
+                if workspaces.is_empty() {
+                    continue;
+                }
 
-                            let event = AppEvent::WorkspaceStatusAnalyzed {
-                                project_path,
-                                status,
-                            };
-                            if poll_tx.send(event).await.is_err() {
-                                tracing::warn!("Poll receiver dropped");
-                                return;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("Poll scan error: {}", e);
+                // Fetch statuses from Kiro SQLite
+                for (path, status) in kiro_fetcher.get_statuses(&workspaces) {
+                    let session_status = status.to_session_status(&path);
+                    let event = AppEvent::WorkspaceStatusAnalyzed {
+                        project_path: path,
+                        status: session_status,
+                    };
+                    if poll_tx.send(event).await.is_err() {
+                        tracing::warn!("Kiro poll receiver dropped");
+                        return;
                     }
                 }
             }
@@ -395,12 +339,15 @@ async fn run_logwatch(
         None
     };
 
-    // Handle event-driven triggers
+    // Handle Claude Code event-driven triggers
     while let Some(project_path) = trigger_rx.recv().await {
-        service.analyze_for_project(&project_path).await;
+        if let Some(ref service) = claude_service {
+            service.handle_trigger(&project_path).await;
+        }
     }
 
-    if let Some(handle) = polling_handle {
+    // Cleanup
+    if let Some(handle) = kiro_polling_handle {
         handle.abort();
     }
     tracing::info!("Log watch service stopped");
@@ -414,6 +361,7 @@ fn run_app(
     worktree_manager: &WorktreeManager,
     mut notify_rx: tokio::sync::mpsc::Receiver<AppEvent>,
     logwatch_trigger: Option<LogWatchTrigger>,
+    workspace_watch_tx: Option<tokio::sync::watch::Sender<Vec<String>>>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<()> {
     // 起動直後に即座にポーリングするため10から開始
@@ -421,6 +369,12 @@ fn run_app(
     // ダブルクリック検出用の前回クリック情報
     let mut last_click: Option<(Instant, u16)> = None;
     const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(300);
+
+    // Send initial workspace list to logwatch service
+    if let Some(ref tx) = workspace_watch_tx {
+        let paths: Vec<String> = state.workspaces.iter().map(|w| w.project_path.clone()).collect();
+        let _ = tx.send(paths);
+    }
 
     loop {
         // Check for notify events (non-blocking)
@@ -452,7 +406,7 @@ fn run_app(
             handle_notify_event(state, event);
         }
 
-        // 1秒ごとにZellijタブ状態を更新（100ms × 10回 = 1秒）
+        // 1秒ごとにZellijタブ状態とワークスペースリストを更新（100ms × 10回 = 1秒）
         if tick_count >= 10 {
             tick_count = 0;
             if let Some(session) = zellij.session_name() {
@@ -467,6 +421,12 @@ fn run_app(
                 }
             } else {
                 tracing::debug!("No session name configured");
+            }
+
+            // Update workspace list for Kiro SQLite polling
+            if let Some(ref tx) = workspace_watch_tx {
+                let paths: Vec<String> = state.workspaces.iter().map(|w| w.project_path.clone()).collect();
+                let _ = tx.send(paths);
             }
         }
         tick_count += 1;

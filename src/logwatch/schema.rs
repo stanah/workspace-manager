@@ -111,7 +111,7 @@ impl StatusDetail {
             StatusDetail::Thinking => "thinking",
             StatusDetail::ExecutingTool => "running tool",
             StatusDetail::WritingCode => "writing code",
-            StatusDetail::UserInput => "needs input",
+            StatusDetail::UserInput => "ready",
             StatusDetail::Confirmation => "confirm?",
             StatusDetail::Success => "done",
             StatusDetail::Partial => "partial",
@@ -236,8 +236,10 @@ impl SessionStatus {
     /// Get a truncated summary for display (max 50 chars)
     pub fn display_summary(&self) -> Option<String> {
         self.summary.as_ref().map(|s| {
-            if s.len() > 50 {
-                format!("{}...", &s[..47])
+            let char_count = s.chars().count();
+            if char_count > 50 {
+                let truncated: String = s.chars().take(47).collect();
+                format!("{}...", truncated)
             } else {
                 s.clone()
             }

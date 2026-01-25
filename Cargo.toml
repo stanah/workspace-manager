@@ -23,6 +23,7 @@ directories = "5.0"
 toml = "0.8"
 notify = "7.0"
 chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Phase 2で追加
 # rmcp = { version = "0.2", features = ["server", "macros", "transport-io"] }
