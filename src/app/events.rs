@@ -61,7 +61,7 @@ pub enum Action {
     LaunchYazi,
     /// Zellij: 新規Claude Codeセッション
     NewSession,
-    /// Zellij: ワークスペース終了
+    /// Zellij: ワークスペース終了（Internal→ペイン閉じる、External→タブ閉じる）
     CloseWorkspace,
     /// 新規worktree作成
     CreateWorktree,
@@ -75,6 +75,10 @@ pub enum Action {
     ScrollUp,
     /// マウススクロール下
     ScrollDown,
+    /// マウスダブルクリックで行選択＋オープン
+    MouseDoubleClick(u16),
+    /// マウスミドルクリックで行選択＋ワークスペース閉じる
+    MouseMiddleClick(u16),
     /// 何もしない
     None,
 }
@@ -107,6 +111,8 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
             // エディタで開く
             (KeyCode::Char('e'), _) => Action::OpenInEditor,
+            // ワークスペース閉じる（Backspace）
+            (KeyCode::Backspace, _) => Action::CloseWorkspace,
             // Zellijアクション
             (KeyCode::Char('l'), _) => Action::LaunchLazygit,
             (KeyCode::Char('g'), _) => Action::LaunchShell,
@@ -130,6 +136,16 @@ pub fn mouse_action(event: MouseEvent, list_area_y: u16, header_height: u16) -> 
             if event.row >= data_start {
                 let row_index = event.row - data_start;
                 Action::MouseSelect(row_index)
+            } else {
+                Action::None
+            }
+        }
+        MouseEventKind::Down(crossterm::event::MouseButton::Middle) => {
+            // ミドルクリックでタブを閉じる
+            let data_start = list_area_y + header_height;
+            if event.row >= data_start {
+                let row_index = event.row - data_start;
+                Action::MouseMiddleClick(row_index)
             } else {
                 Action::None
             }

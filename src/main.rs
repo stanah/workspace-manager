@@ -8,7 +8,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -148,6 +148,9 @@ fn run_app(
 ) -> Result<()> {
     // 起動直後に即座にポーリングするため10から開始
     let mut tick_count = 10u8;
+    // ダブルクリック検出用の前回クリック情報
+    let mut last_click: Option<(Instant, u16)> = None;
+    const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(300);
 
     loop {
         // 1秒ごとにZellijタブ状態を更新（100ms × 10回 = 1秒）
@@ -193,6 +196,25 @@ fn run_app(
                     AppEvent::Mouse(mouse) => {
                         // header_height = 1 (border only, no header row in Table)
                         let action = mouse_action(mouse, 0, 1);
+                        // ダブルクリック検出
+                        let action = match action {
+                            Action::MouseSelect(row) => {
+                                let now = Instant::now();
+                                let is_double_click = last_click
+                                    .map(|(time, prev_row)| {
+                                        now.duration_since(time) < DOUBLE_CLICK_THRESHOLD
+                                            && prev_row == row
+                                    })
+                                    .unwrap_or(false);
+                                last_click = Some((now, row));
+                                if is_double_click {
+                                    Action::MouseDoubleClick(row)
+                                } else {
+                                    Action::MouseSelect(row)
+                                }
+                            }
+                            other => other,
+                        };
                         handle_action(state, zellij, config, worktree_manager, action)?;
                     }
                     AppEvent::Resize(_, _) => {}
@@ -662,12 +684,30 @@ fn handle_action(
         }
         Action::CloseWorkspace => {
             if let Some(ws) = state.selected_workspace() {
-                if let Some(pane_id) = ws.pane_id {
-                    if zellij.is_available() {
+                if zellij.is_internal() {
+                    // Internal mode: ペインを閉じる
+                    if let Some(pane_id) = ws.pane_id {
                         if let Err(e) = zellij.close_pane(pane_id) {
                             state.status_message = Some(format!("Failed to close pane: {}", e));
                         }
                     }
+                } else if config.zellij.enabled {
+                    // External mode: タブを閉じる
+                    if let Some(session) = zellij.session_name() {
+                        let tab_name = config.zellij.generate_tab_name(&ws.repo_name, &ws.branch);
+                        match zellij.close_tab(session, &tab_name) {
+                            Ok(()) => {
+                                state.status_message = Some(format!("Closed tab: {}", tab_name));
+                            }
+                            Err(e) => {
+                                state.status_message = Some(format!("Failed to close tab: {}", e));
+                            }
+                        }
+                    } else {
+                        state.status_message = Some("No Zellij session configured".to_string());
+                    }
+                } else {
+                    state.status_message = Some("Zellij integration disabled".to_string());
                 }
             }
         }
@@ -676,6 +716,24 @@ fn handle_action(
             if index < state.tree_item_count() {
                 state.selected_index = index;
             }
+        }
+        Action::MouseDoubleClick(row) => {
+            // まず行を選択
+            let index = row as usize;
+            if index < state.tree_item_count() {
+                state.selected_index = index;
+            }
+            // Action::Selectと同じ処理を実行（再帰的に呼び出し）
+            handle_action(state, zellij, config, _worktree_manager, Action::Select)?;
+        }
+        Action::MouseMiddleClick(row) => {
+            // まず行を選択
+            let index = row as usize;
+            if index < state.tree_item_count() {
+                state.selected_index = index;
+            }
+            // Action::CloseWorkspaceと同じ処理を実行（再帰的に呼び出し）
+            handle_action(state, zellij, config, _worktree_manager, Action::CloseWorkspace)?;
         }
         Action::ScrollUp => {
             state.move_up();

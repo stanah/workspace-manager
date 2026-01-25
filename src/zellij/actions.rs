@@ -171,6 +171,24 @@ impl ZellijActions {
         Ok(())
     }
 
+    /// タブを閉じる
+    pub fn close_tab(&self, session: &str, tab_name: &str) -> Result<()> {
+        // まず対象タブに切り替え
+        self.go_to_tab(session, tab_name)?;
+
+        // タブを閉じる
+        let status = Command::new("zellij")
+            .args(["--session", session, "action", "close-tab"])
+            .status()
+            .context("Failed to close tab")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to close tab: {}", tab_name);
+        }
+
+        Ok(())
+    }
+
     /// 新規タブを作成
     pub fn new_tab(
         &self,
