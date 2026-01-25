@@ -146,7 +146,29 @@ fn run_app(
     config: &mut Config,
     worktree_manager: &WorktreeManager,
 ) -> Result<()> {
+    // 起動直後に即座にポーリングするため10から開始
+    let mut tick_count = 10u8;
+
     loop {
+        // 1秒ごとにZellijタブ状態を更新（100ms × 10回 = 1秒）
+        if tick_count >= 10 {
+            tick_count = 0;
+            if let Some(session) = zellij.session_name() {
+                match zellij.query_tab_names(session) {
+                    Ok(tabs) => {
+                        tracing::debug!("Open tabs: {:?}", tabs);
+                        state.update_open_tabs(tabs);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to query tabs: {}", e);
+                    }
+                }
+            } else {
+                tracing::debug!("No session name configured");
+            }
+        }
+        tick_count += 1;
+
         terminal.draw(|frame| {
             ui::render(frame, state);
         })?;

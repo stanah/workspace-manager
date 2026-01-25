@@ -96,6 +96,8 @@ pub struct AppState {
     pub should_quit: bool,
     /// ステータスバーメッセージ
     pub status_message: Option<String>,
+    /// Zellijで開いているタブ名のキャッシュ
+    open_tabs: HashSet<String>,
 }
 
 impl AppState {
@@ -113,6 +115,7 @@ impl AppState {
             selection_dialog: None,
             should_quit: false,
             status_message: None,
+            open_tabs: HashSet::new(),
         }
     }
 
@@ -521,6 +524,27 @@ impl AppState {
     /// 選択ダイアログのコンテキストを取得
     pub fn selection_dialog_context(&self) -> Option<&SelectionContext> {
         self.selection_dialog.as_ref().and_then(|d| d.context.as_ref())
+    }
+
+    /// Zellijで開いているタブ名を更新
+    pub fn update_open_tabs(&mut self, tabs: Vec<String>) {
+        self.open_tabs = tabs.into_iter().collect();
+    }
+
+    /// ワークスペースがZellijタブとして開いているか確認
+    /// タブ名は通常 "{repo}/{branch}" 形式なので、複数パターンでマッチング
+    pub fn is_workspace_open(&self, repo_name: &str, branch: &str) -> bool {
+        // パターン1: "{repo}/{branch}" 形式（デフォルト）
+        let pattern1 = format!("{}/{}", repo_name, branch);
+        // パターン2: ブランチ名のみ
+        let pattern2 = branch;
+        // パターン3: "=" 形式のrepo名の場合、ベース名で検索
+        let base_repo = repo_name.split('=').next().unwrap_or(repo_name);
+        let pattern3 = format!("{}/{}", base_repo, branch);
+
+        self.open_tabs.contains(&pattern1)
+            || self.open_tabs.contains(pattern2)
+            || self.open_tabs.contains(&pattern3)
     }
 
     /// 選択中のリポジトリグループのパスを取得

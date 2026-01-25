@@ -60,7 +60,13 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             // worktree行: ステータスアイコンをブランチ名の前に表示
             if let Some(ws) = state.workspaces.get(*workspace_index) {
                 let tree_prefix = if *is_last { "└ " } else { "├ " };
-                let status_style = Style::default().fg(ws.status.color());
+                // Zellijタブとして開いていれば緑、そうでなければ既存の色
+                let status_color = if state.is_workspace_open(&ws.repo_name, &ws.branch) {
+                    Color::Green
+                } else {
+                    ws.status.color()
+                };
+                let status_style = Style::default().fg(status_color);
                 let status_icon = format!("{} ", ws.status.icon());
 
                 let name_style = if is_selected {
