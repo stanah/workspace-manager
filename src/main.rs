@@ -1,18 +1,21 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use workspace_manager::app::{Action, AppEvent, AppState, poll_event};
+use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
 use workspace_manager::ui;
+use workspace_manager::ui::input_dialog::InputDialogKind;
+use workspace_manager::workspace::WorktreeManager;
 use workspace_manager::zellij::ZellijActions;
 
 /// Workspace Manager - TUI for managing Claude Code workspaces
@@ -82,7 +85,6 @@ fn main() -> Result<()> {
 }
 
 fn init_logging(level: &str) -> Result<()> {
-    // ログファイルに出力（TUIと干渉しないように）
     let log_dir = directories::ProjectDirs::from("", "", "workspace-manager")
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir().join("workspace-manager"));
@@ -103,24 +105,21 @@ fn init_logging(level: &str) -> Result<()> {
 }
 
 fn run_tui() -> Result<()> {
-    // ターミナル初期化
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // アプリケーション状態
+    let config = Config::default();
     let mut state = AppState::new();
     let zellij = ZellijActions::new();
+    let worktree_manager = WorktreeManager::new(config.worktree.clone());
 
-    // 初期スキャン
     state.scan_workspaces();
 
-    // メインループ
-    let result = run_app(&mut terminal, &mut state, &zellij);
+    let result = run_app(&mut terminal, &mut state, &zellij, &worktree_manager);
 
-    // クリーンアップ
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -136,24 +135,32 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     zellij: &ZellijActions,
+    worktree_manager: &WorktreeManager,
 ) -> Result<()> {
     loop {
-        // 描画
         terminal.draw(|frame| {
             ui::render(frame, state);
         })?;
 
-        // イベント処理
         if let Some(event) = poll_event(Duration::from_millis(100))? {
-            match event {
-                AppEvent::Key(key) => {
-                    let action = Action::from(key);
-                    handle_action(state, zellij, action)?;
+            // 入力モードの場合は特別処理
+            if state.view_mode == ViewMode::Input {
+                if let AppEvent::Key(key) = event {
+                    handle_input_event(state, key, worktree_manager)?;
                 }
-                AppEvent::Resize(_, _) => {
-                    // 自動的に再描画される
+            } else {
+                match event {
+                    AppEvent::Key(key) => {
+                        let action = Action::from(key);
+                        handle_action(state, zellij, worktree_manager, action)?;
+                    }
+                    AppEvent::Mouse(mouse) => {
+                        let action = mouse_action(mouse, 0, 2);
+                        handle_action(state, zellij, worktree_manager, action)?;
+                    }
+                    AppEvent::Resize(_, _) => {}
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -165,9 +172,137 @@ fn run_app(
     Ok(())
 }
 
-fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -> Result<()> {
-    use workspace_manager::app::ViewMode;
+/// 入力モードでのキーイベント処理
+fn handle_input_event(
+    state: &mut AppState,
+    key: KeyEvent,
+    worktree_manager: &WorktreeManager,
+) -> Result<()> {
+    // 先に必要な情報を取得
+    let repo_path = state.selected_repo_path();
+    let dialog_kind = state.input_dialog.as_ref().map(|d| d.kind.clone());
+    let dialog_input = state.input_dialog.as_ref().map(|d| d.input.clone());
 
+    match key.code {
+        KeyCode::Esc => {
+            state.close_input_dialog();
+        }
+        KeyCode::Enter => {
+            match dialog_kind {
+                Some(InputDialogKind::CreateWorktree) => {
+                    let branch_name = dialog_input.unwrap_or_default().trim().to_string();
+                    if branch_name.is_empty() {
+                        if let Some(ref mut dialog) = state.input_dialog {
+                            dialog.set_error("Branch name cannot be empty".to_string());
+                        }
+                    } else if let Some(ref rp) = repo_path {
+                        match worktree_manager.create_worktree(
+                            Path::new(rp),
+                            &branch_name,
+                            true,
+                        ) {
+                            Ok(path) => {
+                                state.status_message = Some(format!(
+                                    "Created worktree: {}",
+                                    path.display()
+                                ));
+                                state.close_input_dialog();
+                                state.scan_workspaces();
+                            }
+                            Err(e) => {
+                                if let Some(ref mut dialog) = state.input_dialog {
+                                    dialog.set_error(format!("Failed: {}", e));
+                                }
+                            }
+                        }
+                    } else if let Some(ref mut dialog) = state.input_dialog {
+                        dialog.set_error("No repository selected".to_string());
+                    }
+                }
+                Some(InputDialogKind::DeleteWorktree { .. }) => {
+                    // 'y'で確認する
+                }
+                None => {}
+            }
+        }
+        KeyCode::Char('y') => {
+            if let Some(InputDialogKind::DeleteWorktree { path }) = dialog_kind {
+                if let Some(ref rp) = repo_path {
+                    // チルダを展開
+                    let expanded_path = if path.starts_with("~/") {
+                        if let Some(home) = std::env::var_os("HOME") {
+                            std::path::PathBuf::from(home).join(&path[2..])
+                        } else {
+                            std::path::PathBuf::from(&path)
+                        }
+                    } else {
+                        std::path::PathBuf::from(&path)
+                    };
+
+                    match worktree_manager.remove_worktree(
+                        Path::new(rp),
+                        &expanded_path,
+                        false,
+                    ) {
+                        Ok(()) => {
+                            state.status_message = Some(format!("Deleted worktree: {}", path));
+                            state.close_input_dialog();
+                            state.scan_workspaces();
+                        }
+                        Err(e) => {
+                            if let Some(ref mut dialog) = state.input_dialog {
+                                dialog.set_error(format!("Failed: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Char('n') => {
+            if matches!(dialog_kind, Some(InputDialogKind::DeleteWorktree { .. })) {
+                state.close_input_dialog();
+            } else if let Some(ref mut dialog) = state.input_dialog {
+                dialog.insert_char('n');
+            }
+        }
+        KeyCode::Char(c) => {
+            if !matches!(dialog_kind, Some(InputDialogKind::DeleteWorktree { .. })) {
+                if let Some(ref mut dialog) = state.input_dialog {
+                    dialog.insert_char(c);
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut dialog) = state.input_dialog {
+                dialog.backspace();
+            }
+        }
+        KeyCode::Delete => {
+            if let Some(ref mut dialog) = state.input_dialog {
+                dialog.delete();
+            }
+        }
+        KeyCode::Left => {
+            if let Some(ref mut dialog) = state.input_dialog {
+                dialog.move_cursor_left();
+            }
+        }
+        KeyCode::Right => {
+            if let Some(ref mut dialog) = state.input_dialog {
+                dialog.move_cursor_right();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_action(
+    state: &mut AppState,
+    zellij: &ZellijActions,
+    _worktree_manager: &WorktreeManager,
+    action: Action,
+) -> Result<()> {
     match action {
         Action::Quit => {
             state.should_quit = true;
@@ -181,12 +316,17 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
         Action::ToggleHelp => {
             state.toggle_help();
         }
+        Action::Back => {
+            if state.view_mode != ViewMode::List {
+                state.view_mode = ViewMode::List;
+                state.input_dialog = None;
+            }
+        }
         Action::Refresh => {
             state.status_message = Some("Scanning workspaces...".to_string());
             state.scan_workspaces();
         }
         Action::Select => {
-            // Phase 3: Zellijペインにフォーカス
             if let Some(ws) = state.selected_workspace() {
                 if let Some(pane_id) = ws.pane_id {
                     if zellij.is_available() {
@@ -195,15 +335,23 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
                         }
                     }
                 } else {
-                    // 詳細ビューを表示
                     state.view_mode = ViewMode::Detail;
                 }
             }
         }
+        Action::ToggleExpand => {
+            state.toggle_expand();
+        }
+        Action::CreateWorktree => {
+            state.open_create_worktree_dialog();
+        }
+        Action::DeleteWorktree => {
+            state.open_delete_worktree_dialog();
+        }
         Action::LaunchLazygit => {
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_available() {
-                    let path = std::path::Path::new(&ws.project_path);
+                    let path = Path::new(&ws.project_path);
                     if let Err(e) = zellij.launch_lazygit(path) {
                         state.status_message = Some(format!("Failed to launch lazygit: {}", e));
                     }
@@ -213,7 +361,7 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
         Action::LaunchShell => {
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_available() {
-                    let path = std::path::Path::new(&ws.project_path);
+                    let path = Path::new(&ws.project_path);
                     if let Err(e) = zellij.launch_shell(path) {
                         state.status_message = Some(format!("Failed to launch shell: {}", e));
                     }
@@ -223,7 +371,7 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
         Action::LaunchYazi => {
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_available() {
-                    let path = std::path::Path::new(&ws.project_path);
+                    let path = Path::new(&ws.project_path);
                     if let Err(e) = zellij.launch_yazi(path) {
                         state.status_message = Some(format!("Failed to launch yazi: {}", e));
                     }
@@ -233,7 +381,7 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
         Action::NewSession => {
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_available() {
-                    let path = std::path::Path::new(&ws.project_path);
+                    let path = Path::new(&ws.project_path);
                     if let Err(e) = zellij.launch_claude(path) {
                         state.status_message = Some(format!("Failed to launch Claude: {}", e));
                     }
@@ -250,6 +398,18 @@ fn handle_action(state: &mut AppState, zellij: &ZellijActions, action: Action) -
                     }
                 }
             }
+        }
+        Action::MouseSelect(row) => {
+            let index = row as usize;
+            if index < state.tree_item_count() {
+                state.selected_index = index;
+            }
+        }
+        Action::ScrollUp => {
+            state.move_up();
+        }
+        Action::ScrollDown => {
+            state.move_down();
         }
         Action::None => {}
     }

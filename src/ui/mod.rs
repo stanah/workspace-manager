@@ -1,7 +1,10 @@
 pub mod detail_view;
 pub mod help_view;
+pub mod input_dialog;
 pub mod status_bar;
 pub mod workspace_list;
+
+pub use input_dialog::InputDialog;
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -28,13 +31,18 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     status_bar::render(frame, chunks[1], state);
 
     // オーバーレイ
-    match state.view_mode {
+    match &state.view_mode {
         ViewMode::Help => {
             help_view::render(frame, area);
         }
         ViewMode::Detail => {
             if let Some(ws) = state.selected_workspace() {
                 detail_view::render(frame, area, ws);
+            }
+        }
+        ViewMode::Input => {
+            if let Some(ref dialog) = state.input_dialog {
+                input_dialog::render(frame, area, dialog);
             }
         }
         ViewMode::List => {}

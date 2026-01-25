@@ -6,14 +6,13 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::AppState;
-use crate::workspace::Workspace;
+use crate::app::{AppState, TreeItem};
 
-/// ワークスペース一覧を描画
+/// ワークスペース一覧をツリー形式で描画
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let header = Row::new(vec![
         "Status",
-        "Repository",
+        "Name",
         "Branch",
         "Message",
     ])
@@ -21,15 +20,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     .height(1);
 
     let rows: Vec<Row> = state
-        .workspaces
+        .tree_items
         .iter()
         .enumerate()
-        .map(|(idx, ws)| create_row(ws, idx == state.selected_index))
+        .map(|(idx, item)| create_tree_row(item, state, idx == state.selected_index))
         .collect();
 
     let widths = [
         Constraint::Length(8),  // Status
-        Constraint::Min(20),    // Repository
+        Constraint::Min(25),    // Name (with tree prefix)
         Constraint::Length(25), // Branch
         Constraint::Min(30),    // Message
     ];
@@ -54,26 +53,65 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn create_row(ws: &Workspace, is_selected: bool) -> Row<'static> {
-    let status_style = Style::default().fg(ws.status.color());
-    let status = Span::styled(format!(" {} ", ws.status.icon()), status_style);
+fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<'static> {
+    match item {
+        TreeItem::RepoGroup { name, expanded, worktree_count, .. } => {
+            // リポジトリグループ行
+            let expand_icon = if *expanded { "▼" } else { "▶" };
+            let name_style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
 
-    let repo_style = if is_selected {
-        Style::default().add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
+            Row::new(vec![
+                Line::from(Span::styled(
+                    format!(" {} ", expand_icon),
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(Span::styled(name.clone(), name_style)),
+                Line::from(Span::styled(
+                    format!("({} worktrees)", worktree_count),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+            ])
+            .height(1)
+        }
+        TreeItem::Worktree { workspace_index, is_last } => {
+            // worktree行
+            if let Some(ws) = state.workspaces.get(*workspace_index) {
+                let tree_prefix = if *is_last { "  └─ " } else { "  ├─ " };
+                let status_style = Style::default().fg(ws.status.color());
+                let status = Span::styled(format!(" {} ", ws.status.icon()), status_style);
 
-    let branch_style = Style::default().fg(Color::Green);
+                let name_style = if is_selected {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
 
-    let message = ws.message.clone().unwrap_or_default();
-    let message_style = Style::default().fg(Color::Gray);
+                let branch_style = Style::default().fg(Color::Green);
+                let message = ws.message.clone().unwrap_or_default();
+                let message_style = Style::default().fg(Color::Gray);
 
-    Row::new(vec![
-        Line::from(status),
-        Line::from(Span::styled(ws.repo_name.clone(), repo_style)),
-        Line::from(Span::styled(ws.branch.clone(), branch_style)),
-        Line::from(Span::styled(message, message_style)),
-    ])
-    .height(1)
+                Row::new(vec![
+                    Line::from(status),
+                    Line::from(vec![
+                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(ws.branch.clone(), name_style),
+                    ]),
+                    Line::from(Span::styled(ws.display_path(), branch_style)),
+                    Line::from(Span::styled(message, message_style)),
+                ])
+                .height(1)
+            } else {
+                Row::new(vec![
+                    Line::from(""),
+                    Line::from("  └─ <invalid>"),
+                    Line::from(""),
+                    Line::from(""),
+                ])
+                .height(1)
+            }
+        }
+    }
 }

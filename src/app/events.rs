@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 
 /// アプリケーション内部イベント
@@ -6,6 +6,8 @@ use std::time::Duration;
 pub enum AppEvent {
     /// キー入力
     Key(KeyEvent),
+    /// マウス入力
+    Mouse(MouseEvent),
     /// ターミナルリサイズ
     Resize(u16, u16),
     /// ワークスペース状態更新（MCPから）
@@ -37,6 +39,10 @@ pub enum Action {
     MoveDown,
     /// 選択（フォーカス）
     Select,
+    /// 展開/折りたたみ切り替え
+    ToggleExpand,
+    /// 戻る/閉じる
+    Back,
     /// ヘルプ表示切替
     ToggleHelp,
     /// リフレッシュ
@@ -53,6 +59,16 @@ pub enum Action {
     NewSession,
     /// Zellij: ワークスペース終了
     CloseWorkspace,
+    /// 新規worktree作成
+    CreateWorktree,
+    /// worktree削除
+    DeleteWorktree,
+    /// マウスクリックで行選択
+    MouseSelect(u16),
+    /// マウススクロール上
+    ScrollUp,
+    /// マウススクロール下
+    ScrollDown,
     /// 何もしない
     None,
 }
@@ -65,13 +81,21 @@ impl From<KeyEvent> for Action {
             (KeyCode::Down | KeyCode::Char('j'), _) => Action::MoveDown,
             // 選択
             (KeyCode::Enter, _) => Action::Select,
+            // 展開/折りたたみ
+            (KeyCode::Char(' '), _) => Action::ToggleExpand,
+            (KeyCode::Tab, _) => Action::ToggleExpand,
             // ヘルプ
             (KeyCode::Char('?'), _) => Action::ToggleHelp,
             // リフレッシュ
             (KeyCode::Char('r'), _) => Action::Refresh,
+            // 閉じる/戻る
+            (KeyCode::Esc, _) => Action::Back,
             // 終了
             (KeyCode::Char('q'), _) => Action::Quit,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
+            // Worktree管理
+            (KeyCode::Char('c'), _) | (KeyCode::Char('a'), _) => Action::CreateWorktree,
+            (KeyCode::Char('d'), _) => Action::DeleteWorktree,
             // Zellijアクション
             (KeyCode::Char('l'), _) => Action::LaunchLazygit,
             (KeyCode::Char('g'), _) => Action::LaunchShell,
@@ -84,11 +108,33 @@ impl From<KeyEvent> for Action {
     }
 }
 
+/// マウスイベントからアクションへの変換
+/// list_area_y: リスト領域の開始Y座標
+/// header_height: ボーダー(1) + ヘッダー行(1) = 2
+pub fn mouse_action(event: MouseEvent, list_area_y: u16, header_height: u16) -> Action {
+    match event.kind {
+        MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+            // データ行の開始位置 = list_area_y + header_height
+            let data_start = list_area_y + header_height;
+            if event.row >= data_start {
+                let row_index = event.row - data_start;
+                Action::MouseSelect(row_index)
+            } else {
+                Action::None
+            }
+        }
+        MouseEventKind::ScrollUp => Action::ScrollUp,
+        MouseEventKind::ScrollDown => Action::ScrollDown,
+        _ => Action::None,
+    }
+}
+
 /// イベントポーリング
 pub fn poll_event(timeout: Duration) -> std::io::Result<Option<AppEvent>> {
     if event::poll(timeout)? {
         match event::read()? {
             Event::Key(key) => Ok(Some(AppEvent::Key(key))),
+            Event::Mouse(mouse) => Ok(Some(AppEvent::Mouse(mouse))),
             Event::Resize(w, h) => Ok(Some(AppEvent::Resize(w, h))),
             _ => Ok(None),
         }

@@ -32,8 +32,25 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("  Focus workspace pane"),
         ]),
         Line::from(vec![
+            Span::styled("  Space", Style::default().fg(Color::Yellow)),
+            Span::raw("  Expand/collapse repo group"),
+        ]),
+        Line::from(vec![
             Span::styled("  r    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Refresh workspace list"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Worktree Management", Style::default().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  c/a  ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Create new worktree"),
+        ]),
+        Line::from(vec![
+            Span::styled("  d    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Delete worktree"),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -68,6 +85,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  ?    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Toggle this help"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc  ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Close overlay / Back"),
         ]),
         Line::from(vec![
             Span::styled("  q    ", Style::default().fg(Color::Yellow)),
