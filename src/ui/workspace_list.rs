@@ -113,5 +113,34 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 .height(1)
             }
         }
+        TreeItem::Branch { name, is_local, is_last, .. } => {
+            // ブランチ行（worktree未作成）
+            let tree_prefix = if *is_last { "  └─ " } else { "  ├─ " };
+
+            // ローカルは緑、リモートはシアンで表示
+            let (tag, tag_color) = if *is_local {
+                ("[L]", Color::Green)
+            } else {
+                ("[R]", Color::Cyan)
+            };
+
+            let name_style = if is_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            Row::new(vec![
+                Line::from(Span::styled("   ", Style::default())), // 空のステータス
+                Line::from(vec![
+                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{} ", tag), Style::default().fg(tag_color)),
+                    Span::styled(name.clone(), name_style),
+                ]),
+                Line::from(Span::styled("(no worktree)", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("Press 'a' to create", Style::default().fg(Color::DarkGray))),
+            ])
+            .height(1)
+        }
     }
 }

@@ -45,6 +45,8 @@ pub enum Action {
     Back,
     /// ヘルプ表示切替
     ToggleHelp,
+    /// 表示モード切り替え（Worktrees / +Local / +All）
+    ToggleDisplayMode,
     /// リフレッシュ
     Refresh,
     /// 終了
@@ -86,6 +88,8 @@ impl From<KeyEvent> for Action {
             (KeyCode::Tab, _) => Action::ToggleExpand,
             // ヘルプ
             (KeyCode::Char('?'), _) => Action::ToggleHelp,
+            // 表示モード切り替え
+            (KeyCode::Char('v'), _) => Action::ToggleDisplayMode,
             // リフレッシュ
             (KeyCode::Char('r'), _) => Action::Refresh,
             // 閉じる/戻る

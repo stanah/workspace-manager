@@ -1,4 +1,4 @@
-use crate::workspace::{Workspace, WorkspaceStatus, scan_for_repositories, get_default_search_paths};
+use crate::workspace::{Workspace, WorkspaceStatus, WorktreeManager, scan_for_repositories, get_default_search_paths};
 use std::collections::{HashMap, HashSet};
 
 use crate::ui::InputDialog;
@@ -14,6 +14,38 @@ pub enum ViewMode {
     Input,
 }
 
+/// リスト表示モード（ブランチ表示の有無）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListDisplayMode {
+    /// 既存worktreeのみ表示
+    #[default]
+    Worktrees,
+    /// worktree + ローカルブランチ
+    WithLocalBranches,
+    /// worktree + ローカル + リモートブランチ
+    WithAllBranches,
+}
+
+impl ListDisplayMode {
+    /// 次の表示モードに切り替え
+    pub fn next(self) -> Self {
+        match self {
+            Self::Worktrees => Self::WithLocalBranches,
+            Self::WithLocalBranches => Self::WithAllBranches,
+            Self::WithAllBranches => Self::Worktrees,
+        }
+    }
+
+    /// 表示用ラベル
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Worktrees => "Worktrees",
+            Self::WithLocalBranches => "+Local",
+            Self::WithAllBranches => "+All",
+        }
+    }
+}
+
 /// ツリー表示用のアイテム
 #[derive(Debug, Clone)]
 pub enum TreeItem {
@@ -27,6 +59,13 @@ pub enum TreeItem {
     /// ワークスペース（worktree）
     Worktree {
         workspace_index: usize,
+        is_last: bool,
+    },
+    /// ブランチ（worktree未作成）
+    Branch {
+        name: String,
+        is_local: bool,
+        repo_path: String,
         is_last: bool,
     },
 }
@@ -45,6 +84,8 @@ pub struct AppState {
     pub selected_index: usize,
     /// 表示モード
     pub view_mode: ViewMode,
+    /// リスト表示モード（ブランチ表示の有無）
+    pub list_display_mode: ListDisplayMode,
     /// 入力ダイアログ状態
     pub input_dialog: Option<InputDialog>,
     /// 終了フラグ
@@ -63,6 +104,7 @@ impl AppState {
             session_map: HashMap::new(),
             selected_index: 0,
             view_mode: ViewMode::List,
+            list_display_mode: ListDisplayMode::default(),
             input_dialog: None,
             should_quit: false,
             status_message: None,
@@ -92,16 +134,24 @@ impl AppState {
     }
 
     /// ツリー構造を再構築
-    fn rebuild_tree(&mut self) {
+    pub fn rebuild_tree(&mut self) {
+        self.rebuild_tree_with_manager(None);
+    }
+
+    /// WorktreeManagerを使ってツリー構造を再構築（ブランチ情報含む）
+    pub fn rebuild_tree_with_manager(&mut self, worktree_manager: Option<&WorktreeManager>) {
         self.tree_items.clear();
 
         // リポジトリごとにグループ化
         let mut repo_groups: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut repo_paths: HashMap<String, String> = HashMap::new(); // repo_key -> project_path
 
         for (idx, ws) in self.workspaces.iter().enumerate() {
             // 親リポジトリのパスを推定（worktreeの場合は親ディレクトリ）
             let repo_key = self.get_repo_key(ws);
-            repo_groups.entry(repo_key).or_default().push(idx);
+            repo_groups.entry(repo_key.clone()).or_default().push(idx);
+            // 最初のワークスペースのパスを保存
+            repo_paths.entry(repo_key).or_insert_with(|| ws.project_path.clone());
         }
 
         // ソートしてツリーアイテムを構築
@@ -111,6 +161,7 @@ impl AppState {
         for repo_key in repo_keys {
             let indices = &repo_groups[&repo_key];
             let is_expanded = !self.collapsed_repos.contains(&repo_key);
+            let repo_path = repo_paths.get(&repo_key).cloned().unwrap_or_default();
 
             // リポジトリ名を取得
             let repo_name = indices
@@ -118,6 +169,44 @@ impl AppState {
                 .and_then(|&idx| self.workspaces.get(idx))
                 .map(|ws| ws.repo_name.clone())
                 .unwrap_or_else(|| "unknown".to_string());
+
+            // 既存worktreeのブランチ名を収集
+            let existing_branches: HashSet<String> = indices
+                .iter()
+                .filter_map(|&idx| self.workspaces.get(idx))
+                .map(|ws| ws.branch.clone())
+                .collect();
+
+            // ブランチ情報を取得
+            let (local_branches, remote_branches) = if self.list_display_mode != ListDisplayMode::Worktrees {
+                if let Some(manager) = worktree_manager {
+                    let local = manager
+                        .list_local_branches(std::path::Path::new(&repo_path))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|b| !existing_branches.contains(b))
+                        .collect::<Vec<_>>();
+
+                    let remote = if self.list_display_mode == ListDisplayMode::WithAllBranches {
+                        manager
+                            .list_remote_branches(std::path::Path::new(&repo_path))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|b| !existing_branches.contains(b) && !local.contains(b))
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+
+                    (local, remote)
+                } else {
+                    (Vec::new(), Vec::new())
+                }
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
+            let total_items = indices.len() + local_branches.len() + remote_branches.len();
 
             // グループヘッダーを追加
             self.tree_items.push(TreeItem::RepoGroup {
@@ -127,12 +216,40 @@ impl AppState {
                 worktree_count: indices.len(),
             });
 
-            // 展開されている場合はworktreeを追加
+            // 展開されている場合はworktreeとブランチを追加
             if is_expanded {
-                for (i, &ws_idx) in indices.iter().enumerate() {
-                    let is_last = i == indices.len() - 1;
+                let mut item_count = 0;
+
+                // Worktreeを追加
+                for &ws_idx in indices.iter() {
+                    item_count += 1;
+                    let is_last = item_count == total_items;
                     self.tree_items.push(TreeItem::Worktree {
                         workspace_index: ws_idx,
+                        is_last,
+                    });
+                }
+
+                // ローカルブランチを追加
+                for branch in local_branches {
+                    item_count += 1;
+                    let is_last = item_count == total_items;
+                    self.tree_items.push(TreeItem::Branch {
+                        name: branch,
+                        is_local: true,
+                        repo_path: repo_path.clone(),
+                        is_last,
+                    });
+                }
+
+                // リモートブランチを追加
+                for branch in remote_branches {
+                    item_count += 1;
+                    let is_last = item_count == total_items;
+                    self.tree_items.push(TreeItem::Branch {
+                        name: branch,
+                        is_local: false,
+                        repo_path: repo_path.clone(),
                         is_last,
                     });
                 }
@@ -220,12 +337,27 @@ impl AppState {
             Some(TreeItem::Worktree { workspace_index, .. }) => {
                 self.workspaces.get(*workspace_index)
             }
-            Some(TreeItem::RepoGroup { .. }) => {
-                // グループが選択されている場合は最初のworktreeを返す
+            Some(TreeItem::RepoGroup { .. }) | Some(TreeItem::Branch { .. }) => {
+                // グループまたはブランチが選択されている場合はNone
                 None
             }
             None => None,
         }
+    }
+
+    /// 現在選択中のブランチ情報を取得
+    pub fn selected_branch_info(&self) -> Option<(&str, bool, &str)> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::Branch { name, is_local, repo_path, .. }) => {
+                Some((name.as_str(), *is_local, repo_path.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// 表示モードを切り替え
+    pub fn toggle_display_mode(&mut self) {
+        self.list_display_mode = self.list_display_mode.next();
     }
 
     /// 現在選択中のツリーアイテムを取得
@@ -343,9 +475,13 @@ impl AppState {
     pub fn selected_repo_path(&self) -> Option<String> {
         // 現在選択中のアイテムがWorktreeの場合はそのワークスペースのパスを返す
         // RepoGroupの場合は最初のworktreeのパスを返す
+        // Branchの場合はrepo_pathを返す
         match self.tree_items.get(self.selected_index) {
             Some(TreeItem::Worktree { workspace_index, .. }) => {
                 self.workspaces.get(*workspace_index).map(|ws| ws.project_path.clone())
+            }
+            Some(TreeItem::Branch { repo_path, .. }) => {
+                Some(repo_path.clone())
             }
             Some(TreeItem::RepoGroup { path, .. }) => {
                 // このグループの最初のworktreeを探す

@@ -4,4 +4,4 @@ pub mod state;
 
 pub use config::{Config, WorktreeConfig, WorktreePathStyle};
 pub use events::{Action, AppEvent, mouse_action, poll_event};
-pub use state::{AppState, TreeItem, ViewMode};
+pub use state::{AppState, ListDisplayMode, TreeItem, ViewMode};

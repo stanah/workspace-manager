@@ -117,6 +117,7 @@ fn run_tui() -> Result<()> {
     let worktree_manager = WorktreeManager::new(config.worktree.clone());
 
     state.scan_workspaces();
+    state.rebuild_tree_with_manager(Some(&worktree_manager));
 
     let result = run_app(&mut terminal, &mut state, &zellij, &worktree_manager);
 
@@ -325,6 +326,7 @@ fn handle_action(
         Action::Refresh => {
             state.status_message = Some("Scanning workspaces...".to_string());
             state.scan_workspaces();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
         }
         Action::Select => {
             if let Some(ws) = state.selected_workspace() {
@@ -342,8 +344,37 @@ fn handle_action(
         Action::ToggleExpand => {
             state.toggle_expand();
         }
+        Action::ToggleDisplayMode => {
+            state.toggle_display_mode();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
+            state.status_message = Some(format!("View: {}", state.list_display_mode.label()));
+        }
         Action::CreateWorktree => {
-            state.open_create_worktree_dialog();
+            // ブランチが選択されている場合は即座にworktree作成
+            if let Some((branch_name, _is_local, repo_path)) = state.selected_branch_info() {
+                let branch_name = branch_name.to_string();
+                let repo_path = repo_path.to_string();
+                match _worktree_manager.create_worktree(
+                    Path::new(&repo_path),
+                    &branch_name,
+                    false, // 既存ブランチなのでcreate_branch=false
+                ) {
+                    Ok(path) => {
+                        state.status_message = Some(format!(
+                            "Created worktree: {}",
+                            path.display()
+                        ));
+                        state.scan_workspaces();
+                        state.rebuild_tree_with_manager(Some(_worktree_manager));
+                    }
+                    Err(e) => {
+                        state.status_message = Some(format!("Failed: {}", e));
+                    }
+                }
+            } else {
+                // Worktreeまたはグループ選択時は既存のダイアログを開く
+                state.open_create_worktree_dialog();
+            }
         }
         Action::DeleteWorktree => {
             state.open_delete_worktree_dialog();
