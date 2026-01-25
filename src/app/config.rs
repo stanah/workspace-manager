@@ -208,6 +208,31 @@ impl Config {
 
         Ok(())
     }
+
+    /// 現在の設定をファイルに保存
+    pub fn save(&self) -> Result<()> {
+        let config_path = Self::config_path()?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(config_path, content)?;
+
+        Ok(())
+    }
+
+    /// Zellijセッション名を更新して保存
+    pub fn save_zellij_session(&mut self, session_name: String) -> Result<()> {
+        self.zellij.session_name = Some(session_name);
+        self.save()
+    }
+
+    /// Zellijデフォルトレイアウトを更新して保存
+    pub fn save_zellij_layout(&mut self, layout_path: PathBuf) -> Result<()> {
+        self.zellij.default_layout = Some(layout_path);
+        self.save()
+    }
 }
 
 mod dirs {

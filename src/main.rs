@@ -112,7 +112,7 @@ fn run_tui() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let config = Config::default();
+    let mut config = Config::load().unwrap_or_default();
     let mut state = AppState::new();
     let mut zellij = ZellijActions::auto_detect(config.zellij.session_name.clone());
     let worktree_manager = WorktreeManager::new(config.worktree.clone());
@@ -120,7 +120,7 @@ fn run_tui() -> Result<()> {
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut zellij, &config, &worktree_manager);
+    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager);
 
     disable_raw_mode()?;
     execute!(
@@ -137,7 +137,7 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     zellij: &mut ZellijActions,
-    config: &Config,
+    config: &mut Config,
     worktree_manager: &WorktreeManager,
 ) -> Result<()> {
     loop {
@@ -311,7 +311,7 @@ fn handle_selection_event(
     state: &mut AppState,
     key: KeyEvent,
     zellij: &mut ZellijActions,
-    config: &Config,
+    config: &mut Config,
 ) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
@@ -332,7 +332,11 @@ fn handle_selection_event(
                 match kind {
                     SelectionDialogKind::SelectSession => {
                         // セッションを選択した場合、そのセッション名を設定してタブを開く
-                        zellij.set_session_name(selected_item);
+                        zellij.set_session_name(selected_item.clone());
+                        // 設定ファイルに保存
+                        if let Err(e) = config.save_zellij_session(selected_item.clone()) {
+                            state.status_message = Some(format!("Warning: Failed to save config: {}", e));
+                        }
                         state.close_selection_dialog();
 
                         // タブを開く
@@ -367,6 +371,13 @@ fn handle_selection_event(
                         let layout_path = layout_dir.map(|dir| dir.join(format!("{}.kdl", selected_item)));
                         let layout = layout_path.as_deref();
 
+                        // デフォルトレイアウトとして保存
+                        if let Some(ref path) = layout_path {
+                            if let Err(e) = config.save_zellij_layout(path.clone()) {
+                                state.status_message = Some(format!("Warning: Failed to save config: {}", e));
+                            }
+                        }
+
                         match zellij.open_workspace_tab(&tab_name, cwd, layout) {
                             Ok(TabActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
@@ -393,7 +404,7 @@ fn handle_selection_event(
 fn handle_action(
     state: &mut AppState,
     zellij: &mut ZellijActions,
-    config: &Config,
+    config: &mut Config,
     _worktree_manager: &WorktreeManager,
     action: Action,
 ) -> Result<()> {

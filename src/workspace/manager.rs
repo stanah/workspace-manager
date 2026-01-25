@@ -218,9 +218,13 @@ impl WorktreeManager {
             if let Some(name) = branch.name()? {
                 // origin/HEAD などを除外
                 if !name.ends_with("/HEAD") {
-                    // origin/ プレフィックスを除去
-                    if let Some(short_name) = name.split('/').nth(1) {
-                        branches.push(short_name.to_string());
+                    // origin/ プレフィックスを除去（スラッシュを含むブランチ名に対応）
+                    // "origin/claude/feature" -> "claude/feature"
+                    if let Some(idx) = name.find('/') {
+                        let short_name = &name[idx + 1..];
+                        if !short_name.is_empty() {
+                            branches.push(short_name.to_string());
+                        }
                     }
                 }
             }
