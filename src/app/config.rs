@@ -173,7 +173,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 設定ファイルから読み込み
+    /// 設定ファイルから読み込み（存在しない場合はデフォルトを作成して保存）
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
 
@@ -183,16 +183,21 @@ impl Config {
                 .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
             Ok(config)
         } else {
-            Ok(Self::default())
+            // 初回起動時はデフォルト設定をファイルに保存
+            let config = Self::default();
+            if let Err(e) = config.save() {
+                tracing::warn!("Failed to save default config: {}", e);
+            }
+            Ok(config)
         }
     }
 
     /// 設定ファイルパスを取得
     pub fn config_path() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "", "workspace-manager")
-            .ok_or_else(|| anyhow::anyhow!("Failed to determine config directory"))?;
-
-        Ok(dirs.config_dir().join("config.toml"))
+        // ~/.config/workspace-manager/config.toml を使用
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
+        Ok(home.join(".config/workspace-manager/config.toml"))
     }
 
     /// デフォルト設定をファイルに保存

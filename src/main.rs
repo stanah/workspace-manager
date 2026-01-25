@@ -106,13 +106,14 @@ fn init_logging(level: &str) -> Result<()> {
 }
 
 fn run_tui() -> Result<()> {
+    // 設定を先に読み込む（ファイルがなければ作成）
+    let mut config = Config::load().unwrap_or_default();
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    let mut config = Config::load().unwrap_or_default();
     let mut state = AppState::new();
     let mut zellij = ZellijActions::auto_detect(config.zellij.session_name.clone());
     let worktree_manager = WorktreeManager::new(config.worktree.clone());

@@ -104,7 +104,7 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
             // Worktree管理
             (KeyCode::Char('c'), _) | (KeyCode::Char('a'), _) => Action::CreateWorktree,
-            (KeyCode::Char('d'), _) => Action::DeleteWorktree,
+            (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
             // Zellijアクション
             (KeyCode::Char('l'), _) => Action::LaunchLazygit,
             (KeyCode::Char('g'), _) => Action::LaunchShell,
