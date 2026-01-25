@@ -297,6 +297,7 @@ impl ZellijActions {
     }
 
     /// 新規ペインを作成
+    #[allow(dead_code)]
     pub fn new_pane(&self, cwd: &Path, command: &[&str]) -> Result<u32> {
         if !matches!(self.mode, ZellijMode::Internal) {
             anyhow::bail!("Not running inside Zellij");

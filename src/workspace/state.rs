@@ -162,18 +162,13 @@ impl Workspace {
 
     /// 表示用の短縮パスを返す
     pub fn display_path(&self) -> String {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            let home = base_dirs.home_dir();
             if let Some(stripped) = self.project_path.strip_prefix(home.to_string_lossy().as_ref())
             {
                 return format!("~{}", stripped);
             }
         }
         self.project_path.clone()
-    }
-}
-
-mod dirs {
-    pub fn home_dir() -> Option<std::path::PathBuf> {
-        std::env::var_os("HOME").map(std::path::PathBuf::from)
     }
 }

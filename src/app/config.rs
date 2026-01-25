@@ -41,7 +41,7 @@ impl Default for WorktreeConfig {
             .ok()
             .map(PathBuf::from)
             .or_else(|| {
-                dirs::home_dir().map(|h| h.join("ghq"))
+                directories::BaseDirs::new().map(|d| d.home_dir().join("ghq"))
             });
 
         Self {
@@ -334,23 +334,9 @@ impl Config {
     /// 設定ファイルパスを取得
     pub fn config_path() -> Result<PathBuf> {
         // ~/.config/workspace-manager/config.toml を使用
-        let home = dirs::home_dir()
+        let base_dirs = directories::BaseDirs::new()
             .ok_or_else(|| anyhow::anyhow!("Failed to determine home directory"))?;
-        Ok(home.join(".config/workspace-manager/config.toml"))
-    }
-
-    /// デフォルト設定をファイルに保存
-    pub fn save_default() -> Result<()> {
-        let config_path = Self::config_path()?;
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let config = Self::default();
-        let content = toml::to_string_pretty(&config)?;
-        std::fs::write(config_path, content)?;
-
-        Ok(())
+        Ok(base_dirs.home_dir().join(".config/workspace-manager/config.toml"))
     }
 
     /// 現在の設定をファイルに保存
@@ -379,12 +365,6 @@ impl Config {
     }
 }
 
-mod dirs {
-    pub fn home_dir() -> Option<std::path::PathBuf> {
-        std::env::var_os("HOME").map(std::path::PathBuf::from)
-    }
-}
-
 /// Zellij連携設定
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZellijConfig {
@@ -405,7 +385,7 @@ pub struct ZellijConfig {
 impl Default for ZellijConfig {
     fn default() -> Self {
         // workspace-manager のレイアウトディレクトリを使用
-        let layout_dir = dirs::home_dir().map(|h| h.join(".config/workspace-manager/layouts"));
+        let layout_dir = directories::BaseDirs::new().map(|d| d.home_dir().join(".config/workspace-manager/layouts"));
 
         Self {
             enabled: true,
@@ -429,7 +409,7 @@ impl ZellijConfig {
     /// レイアウトディレクトリを取得（なければ作成）
     pub fn ensure_layout_dir(&self) -> Result<PathBuf> {
         let layout_dir = self.layout_dir.clone()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".config/workspace-manager/layouts")))
+            .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().join(".config/workspace-manager/layouts")))
             .ok_or_else(|| anyhow::anyhow!("Failed to determine layout directory"))?;
 
         if !layout_dir.exists() {

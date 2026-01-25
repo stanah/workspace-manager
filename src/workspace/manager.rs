@@ -156,7 +156,8 @@ impl WorktreeManager {
     }
 
     /// リポジトリのworktree一覧を取得
-    pub fn list_worktrees(&self, repo_path: &Path) -> Result<Vec<WorktreeInfo>> {
+    #[allow(dead_code)]
+    pub fn list_worktrees(&self, repo_path: &Path) -> Result<Vec<WorktreeListInfo>> {
         let output = std::process::Command::new("git")
             .current_dir(repo_path)
             .args(["worktree", "list", "--porcelain"])
@@ -170,7 +171,7 @@ impl WorktreeManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut worktrees = Vec::new();
-        let mut current: Option<WorktreeInfo> = None;
+        let mut current: Option<WorktreeListInfo> = None;
 
         for line in stdout.lines() {
             if line.starts_with("worktree ") {
@@ -178,7 +179,7 @@ impl WorktreeManager {
                     worktrees.push(wt);
                 }
                 let path = line.strip_prefix("worktree ").unwrap_or("");
-                current = Some(WorktreeInfo {
+                current = Some(WorktreeListInfo {
                     path: PathBuf::from(path),
                     branch: None,
                     commit: None,
@@ -252,9 +253,10 @@ impl WorktreeManager {
     }
 }
 
-/// Worktree情報
+/// Worktree一覧情報（list_worktrees用）
 #[derive(Debug, Clone)]
-pub struct WorktreeInfo {
+#[allow(dead_code)]
+pub struct WorktreeListInfo {
     pub path: PathBuf,
     pub branch: Option<String>,
     pub commit: Option<String>,

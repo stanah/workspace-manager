@@ -369,11 +369,13 @@ impl AppState {
     }
 
     /// 現在選択中のツリーアイテムを取得
+    #[allow(dead_code)]
     pub fn selected_tree_item(&self) -> Option<&TreeItem> {
         self.tree_items.get(self.selected_index)
     }
 
-    /// ワークスペースを登録（MCPから）
+    /// ワークスペースを登録（MCPから）- Phase 2用
+    #[allow(dead_code)]
     pub fn register_workspace(
         &mut self,
         session_id: String,
@@ -404,7 +406,8 @@ impl AppState {
         self.rebuild_tree();
     }
 
-    /// ワークスペース状態を更新（MCPから）
+    /// ワークスペース状態を更新（MCPから）- Phase 2用
+    #[allow(dead_code)]
     pub fn update_workspace_status(
         &mut self,
         session_id: &str,
@@ -418,7 +421,8 @@ impl AppState {
         }
     }
 
-    /// ワークスペースを登録解除（MCPから）
+    /// ワークスペースを登録解除（MCPから）- Phase 2用
+    #[allow(dead_code)]
     pub fn unregister_workspace(&mut self, session_id: &str) {
         if let Some(&idx) = self.session_map.get(session_id) {
             if let Some(ws) = self.workspaces.get_mut(idx) {

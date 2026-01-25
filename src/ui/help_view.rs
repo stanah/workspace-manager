@@ -1,10 +1,12 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+
+use super::centered_rect;
 
 /// ヘルプオーバーレイを描画
 pub fn render(frame: &mut Frame, area: Rect) {
@@ -111,21 +113,4 @@ pub fn render(frame: &mut Frame, area: Rect) {
         .alignment(Alignment::Left);
 
     frame.render_widget(help, popup_area);
-}
-
-/// 中央配置用のRect計算
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(popup_layout[1])[1]
 }
