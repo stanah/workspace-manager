@@ -60,8 +60,11 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             // worktree行: ステータスアイコンをブランチ名の前に表示
             if let Some(ws) = state.workspaces.get(*workspace_index) {
                 let tree_prefix = if *is_last { "└ " } else { "├ " };
-                // Zellijタブとして開いていれば緑、そうでなければ既存の色
-                let status_color = if state.is_workspace_open(&ws.repo_name, &ws.branch) {
+                let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
+
+                // ステータスアイコンの色はAIツールのステータスを反映
+                // Disconnected状態でZellijで開いている場合は緑に
+                let status_color = if is_open && ws.status == crate::workspace::WorkspaceStatus::Disconnected {
                     Color::Green
                 } else {
                     ws.status.color()
@@ -69,10 +72,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let status_style = Style::default().fg(status_color);
                 let status_icon = format!("{} ", ws.status.icon());
 
-                let name_style = if is_selected {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
+                // ブランチ名のスタイル：開いていれば緑、選択中は太字
+                let name_style = match (is_selected, is_open) {
+                    (true, true) => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    (true, false) => Style::default().add_modifier(Modifier::BOLD),
+                    (false, true) => Style::default().fg(Color::Green),
+                    (false, false) => Style::default(),
                 };
 
                 Row::new(vec![

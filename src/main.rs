@@ -13,10 +13,11 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
+use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::InputDialogKind;
 use workspace_manager::ui::selection_dialog::{SelectionContext, SelectionDialogKind};
-use workspace_manager::workspace::WorktreeManager;
+use workspace_manager::workspace::{WorkspaceStatus, WorktreeManager};
 use workspace_manager::zellij::{TabActionResult, ZellijActions};
 
 /// Workspace Manager - TUI for managing Claude Code workspaces
@@ -47,15 +48,35 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum NotifyAction {
-    /// Register a new workspace
-    Register,
+    /// Register a new workspace session
+    Register {
+        /// Session ID (defaults to CLAUDE_SESSION_ID env var)
+        #[arg(long, env = "CLAUDE_SESSION_ID")]
+        session_id: String,
+        /// Project path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        project_path: String,
+        /// AI CLI tool name (claude, kiro, opencode, codex)
+        #[arg(long)]
+        tool: Option<String>,
+    },
     /// Update workspace status
     Status {
-        /// New status (idle, working, needs_input, success, error)
+        /// Session ID (defaults to CLAUDE_SESSION_ID env var)
+        #[arg(long, env = "CLAUDE_SESSION_ID")]
+        session_id: String,
+        /// New status (working, idle)
         status: String,
+        /// Optional status message
+        #[arg(short, long)]
+        message: Option<String>,
     },
-    /// Unregister a workspace
-    Unregister,
+    /// Unregister a workspace session
+    Unregister {
+        /// Session ID (defaults to CLAUDE_SESSION_ID env var)
+        #[arg(long, env = "CLAUDE_SESSION_ID")]
+        session_id: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -70,18 +91,65 @@ fn main() -> Result<()> {
             eprintln!("Daemon mode will be available in Phase 2");
             Ok(())
         }
-        Some(Commands::Notify { action }) => {
-            info!("Notify mode not yet implemented (Phase 2)");
-            match action {
-                NotifyAction::Register => eprintln!("Register notification (Phase 2)"),
-                NotifyAction::Status { status } => {
-                    eprintln!("Status notification: {} (Phase 2)", status)
-                }
-                NotifyAction::Unregister => eprintln!("Unregister notification (Phase 2)"),
+        Some(Commands::Notify { action }) => handle_notify(action),
+        Some(Commands::Tui) | None => run_tui(),
+    }
+}
+
+/// Normalize a path by expanding ~ to home directory
+fn normalize_path(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}{}", home.to_string_lossy(), &path[1..]);
+        }
+    }
+    path.to_string()
+}
+
+fn handle_notify(action: NotifyAction) -> Result<()> {
+    let socket_path = notify::socket_path();
+
+    // Canonicalize project_path for register action
+    let message = match action {
+        NotifyAction::Register {
+            session_id,
+            project_path,
+            tool,
+        } => {
+            let project_path = std::fs::canonicalize(&project_path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&project_path))
+                .to_string_lossy()
+                .to_string();
+            NotifyMessage::Register {
+                session_id,
+                project_path,
+                tool,
+            }
+        }
+        NotifyAction::Status {
+            session_id,
+            status,
+            message,
+        } => NotifyMessage::Status {
+            session_id,
+            status,
+            message,
+        },
+        NotifyAction::Unregister { session_id } => NotifyMessage::Unregister { session_id },
+    };
+
+    match notify::send_notification(&socket_path, &message) {
+        Ok(()) => {
+            info!("Notification sent successfully");
+            Ok(())
+        }
+        Err(e) => {
+            // If socket doesn't exist, TUI is not running - silently succeed
+            if socket_path.exists() {
+                eprintln!("Warning: Failed to send notification: {}", e);
             }
             Ok(())
         }
-        Some(Commands::Tui) | None => run_tui(),
     }
 }
 
@@ -114,6 +182,20 @@ fn run_tui() -> Result<()> {
         tracing::warn!("Failed to generate layouts: {}", e);
     }
 
+    // Create tokio runtime for async operations
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    // Create channel for notify events
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::channel::<AppEvent>(100);
+
+    // Start the notification listener in background
+    let socket_path = notify::socket_path();
+    runtime.spawn(async move {
+        if let Err(e) = notify::run_listener(&socket_path, notify_tx).await {
+            tracing::error!("Notification listener error: {}", e);
+        }
+    });
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -126,7 +208,11 @@ fn run_tui() -> Result<()> {
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager);
+    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx);
+
+    // Clean up socket on exit
+    let socket_path = notify::socket_path();
+    let _ = std::fs::remove_file(&socket_path);
 
     disable_raw_mode()?;
     execute!(
@@ -145,6 +231,7 @@ fn run_app(
     zellij: &mut ZellijActions,
     config: &mut Config,
     worktree_manager: &WorktreeManager,
+    mut notify_rx: tokio::sync::mpsc::Receiver<AppEvent>,
 ) -> Result<()> {
     // 起動直後に即座にポーリングするため10から開始
     let mut tick_count = 10u8;
@@ -153,6 +240,11 @@ fn run_app(
     const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(300);
 
     loop {
+        // Check for notify events (non-blocking)
+        while let Ok(event) = notify_rx.try_recv() {
+            handle_notify_event(state, event);
+        }
+
         // 1秒ごとにZellijタブ状態を更新（100ms × 10回 = 1秒）
         if tick_count >= 10 {
             tick_count = 0;
@@ -449,6 +541,74 @@ fn handle_selection_event(
         _ => {}
     }
     Ok(())
+}
+
+/// Handle notify events from the UDS listener
+fn handle_notify_event(state: &mut AppState, event: AppEvent) {
+    match event {
+        AppEvent::WorkspaceRegister {
+            session_id,
+            project_path,
+            pane_id,
+        } => {
+            tracing::info!(
+                "Workspace registered: session={}, path={}",
+                session_id,
+                project_path
+            );
+            // Find matching workspace by project_path and update session_id
+            // Compare using normalized paths (expand ~ to home dir)
+            let normalized_path = normalize_path(&project_path);
+            if let Some(ws) = state
+                .workspaces
+                .iter_mut()
+                .find(|w| normalize_path(&w.project_path) == normalized_path)
+            {
+                ws.session_id = Some(session_id.clone());
+                ws.pane_id = pane_id;
+                ws.status = WorkspaceStatus::NeedsInput;  // 登録直後は入力待ち
+                ws.updated_at = std::time::SystemTime::now();
+                tracing::info!("Matched workspace: {} -> session {}", ws.project_path, session_id);
+            } else {
+                tracing::warn!("No matching workspace found for path: {}", project_path);
+            }
+        }
+        AppEvent::WorkspaceUpdate {
+            session_id,
+            status,
+            message,
+        } => {
+            tracing::info!(
+                "Workspace status update: session={}, status={:?}",
+                session_id,
+                status
+            );
+            // Find workspace by session_id and update status
+            if let Some(ws) = state
+                .workspaces
+                .iter_mut()
+                .find(|w| w.session_id.as_ref() == Some(&session_id))
+            {
+                ws.status = status;
+                ws.message = message;
+                ws.updated_at = std::time::SystemTime::now();
+            }
+        }
+        AppEvent::WorkspaceUnregister { session_id } => {
+            tracing::info!("Workspace unregistered: session={}", session_id);
+            // Find workspace by session_id and mark as disconnected
+            if let Some(ws) = state
+                .workspaces
+                .iter_mut()
+                .find(|w| w.session_id.as_ref() == Some(&session_id))
+            {
+                ws.session_id = None;
+                ws.status = WorkspaceStatus::Disconnected;
+                ws.updated_at = std::time::SystemTime::now();
+            }
+        }
+        _ => {}
+    }
 }
 
 fn handle_action(

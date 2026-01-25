@@ -20,12 +20,30 @@ pub enum WorkspaceStatus {
 }
 
 impl WorkspaceStatus {
+    /// Parse status from string
+    ///
+    /// Maps string values to WorkspaceStatus:
+    /// - "working" -> Working (blue)
+    /// - "idle" -> NeedsInput (yellow, indicates user action needed)
+    /// - "success" -> Success (green)
+    /// - "error" -> Error (red)
+    /// - others -> NeedsInput (yellow, default for unknown states)
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "working" => WorkspaceStatus::Working,
+            "idle" => WorkspaceStatus::NeedsInput,
+            "success" => WorkspaceStatus::Success,
+            "error" => WorkspaceStatus::Error,
+            _ => WorkspaceStatus::NeedsInput,
+        }
+    }
+
     /// 状態を表すアイコンを返す
     pub fn icon(&self) -> &'static str {
         match self {
             WorkspaceStatus::Idle => "○",
             WorkspaceStatus::Working => "●",
-            WorkspaceStatus::NeedsInput => "⚠",
+            WorkspaceStatus::NeedsInput => "●",  // 黄色い●（色で区別）
             WorkspaceStatus::Success => "✓",
             WorkspaceStatus::Error => "✗",
             WorkspaceStatus::Disconnected => "◌",
