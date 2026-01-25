@@ -10,15 +10,6 @@ use crate::app::{AppState, TreeItem};
 
 /// ワークスペース一覧をツリー形式で描画
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    let header = Row::new(vec![
-        "Status",
-        "Name",
-        "Branch",
-        "Message",
-    ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    .height(1);
-
     let rows: Vec<Row> = state
         .tree_items
         .iter()
@@ -26,15 +17,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|(idx, item)| create_tree_row(item, state, idx == state.selected_index))
         .collect();
 
-    let widths = [
-        Constraint::Length(8),  // Status
-        Constraint::Min(25),    // Name (with tree prefix)
-        Constraint::Length(25), // Branch
-        Constraint::Min(30),    // Message
-    ];
+    // 単一カラムレイアウト（狭いペイン対応）
+    let widths = [Constraint::Min(10)];
 
     let table = Table::new(rows, widths)
-        .header(header)
         .block(
             Block::default()
                 .title(" Workspaces ")
@@ -55,33 +41,27 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<'static> {
     match item {
-        TreeItem::RepoGroup { name, expanded, worktree_count, .. } => {
+        TreeItem::RepoGroup { name, worktree_count, .. } => {
             // リポジトリグループ行
-            let expand_icon = if *expanded { "▼" } else { "▶" };
             let name_style = Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD);
+            let count_style = Style::default().fg(Color::DarkGray);
 
             Row::new(vec![
-                Line::from(Span::styled(
-                    format!(" {} ", expand_icon),
-                    Style::default().fg(Color::Yellow),
-                )),
-                Line::from(Span::styled(name.clone(), name_style)),
-                Line::from(Span::styled(
-                    format!("({} worktrees)", worktree_count),
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(""),
+                Line::from(vec![
+                    Span::styled(name.clone(), name_style),
+                    Span::styled(format!(" ({})", worktree_count), count_style),
+                ]),
             ])
             .height(1)
         }
         TreeItem::Worktree { workspace_index, is_last } => {
-            // worktree行
+            // worktree行: ステータスアイコンをブランチ名の前に表示
             if let Some(ws) = state.workspaces.get(*workspace_index) {
-                let tree_prefix = if *is_last { "  └─ " } else { "  ├─ " };
+                let tree_prefix = if *is_last { "└ " } else { "├ " };
                 let status_style = Style::default().fg(ws.status.color());
-                let status = Span::styled(format!(" {} ", ws.status.icon()), status_style);
+                let status_icon = format!("{} ", ws.status.icon());
 
                 let name_style = if is_selected {
                     Style::default().add_modifier(Modifier::BOLD)
@@ -89,56 +69,44 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Style::default()
                 };
 
-                let branch_style = Style::default().fg(Color::Green);
-                let message = ws.message.clone().unwrap_or_default();
-                let message_style = Style::default().fg(Color::Gray);
-
                 Row::new(vec![
-                    Line::from(status),
                     Line::from(vec![
+                        Span::styled("  ", Style::default()),
                         Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(status_icon, status_style),
                         Span::styled(ws.branch.clone(), name_style),
                     ]),
-                    Line::from(Span::styled(ws.display_path(), branch_style)),
-                    Line::from(Span::styled(message, message_style)),
                 ])
                 .height(1)
             } else {
-                Row::new(vec![
-                    Line::from(""),
-                    Line::from("  └─ <invalid>"),
-                    Line::from(""),
-                    Line::from(""),
-                ])
+                Row::new(vec![Line::from("  └ <invalid>")])
                 .height(1)
             }
         }
         TreeItem::Branch { name, is_local, is_last, .. } => {
-            // ブランチ行（worktree未作成）
-            let tree_prefix = if *is_last { "  └─ " } else { "  ├─ " };
+            // ブランチ行（worktree未作成）- 控えめな暗い色で表示
+            let tree_prefix = if *is_last { "└ " } else { "├ " };
 
-            // ローカルは緑、リモートはシアンで表示
-            let (tag, tag_color) = if *is_local {
-                ("[L]", Color::Green)
+            // リモートは "origin/..." 形式で表示
+            let display_name = if *is_local {
+                name.clone()
             } else {
-                ("[R]", Color::Cyan)
+                format!("origin/{}", name)
             };
 
             let name_style = if is_selected {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
+                Style::default().fg(Color::DarkGray)
             };
 
             Row::new(vec![
-                Line::from(Span::styled("   ", Style::default())), // 空のステータス
                 Line::from(vec![
+                    Span::styled("  ", Style::default()),
                     Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{} ", tag), Style::default().fg(tag_color)),
-                    Span::styled(name.clone(), name_style),
+                    Span::styled("  ", Style::default()), // アイコン分のスペース
+                    Span::styled(display_name, name_style),
                 ]),
-                Line::from(Span::styled("(no worktree)", Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled("Press 'a' to create", Style::default().fg(Color::DarkGray))),
             ])
             .height(1)
         }
