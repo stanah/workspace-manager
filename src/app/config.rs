@@ -158,6 +158,9 @@ pub struct Config {
     pub zellij: ZellijConfig,
     /// Worktree設定
     pub worktree: WorktreeConfig,
+    /// Log watch設定
+    #[serde(default)]
+    pub logwatch: LogWatchConfig,
 }
 
 fn default_editor() -> String {
@@ -176,6 +179,87 @@ impl Default for Config {
             editor: default_editor(),
             zellij: ZellijConfig::default(),
             worktree: WorktreeConfig::default(),
+            logwatch: LogWatchConfig::default(),
+        }
+    }
+}
+
+/// Log watch configuration for AI-based status analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogWatchConfig {
+    /// Enable log watching and analysis
+    #[serde(default = "default_logwatch_enabled")]
+    pub enabled: bool,
+    /// CLI tool to use for analysis ("claude" or "kiro")
+    #[serde(default = "default_analyzer_tool")]
+    pub analyzer_tool: String,
+    /// Interval between analyses in seconds
+    #[serde(default = "default_analysis_interval")]
+    pub analysis_interval_secs: u64,
+    /// Maximum log lines to analyze
+    #[serde(default = "default_max_log_lines")]
+    pub max_log_lines: usize,
+    /// Claude home directory
+    #[serde(default = "default_claude_home")]
+    pub claude_home: PathBuf,
+    /// Kiro logs directory (optional)
+    pub kiro_logs_dir: Option<PathBuf>,
+    /// Use heuristic analysis instead of AI (for testing/offline)
+    #[serde(default)]
+    pub use_heuristic: bool,
+    /// Enable periodic polling (can be disabled to use only event-driven triggers)
+    #[serde(default = "default_polling_enabled")]
+    pub polling_enabled: bool,
+}
+
+fn default_polling_enabled() -> bool {
+    true
+}
+
+fn default_logwatch_enabled() -> bool {
+    false // Disabled by default to avoid API costs
+}
+
+fn default_analyzer_tool() -> String {
+    "claude".to_string()
+}
+
+fn default_analysis_interval() -> u64 {
+    10 // Analyze every 10 seconds
+}
+
+fn default_max_log_lines() -> usize {
+    500
+}
+
+fn default_claude_home() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".claude")
+}
+
+impl Default for LogWatchConfig {
+    fn default() -> Self {
+        let claude_home = default_claude_home();
+
+        // Kiro logs on macOS
+        let kiro_logs_dir = if cfg!(target_os = "macos") {
+            dirs::home_dir().map(|h| {
+                h.join("Library/Application Support/Kiro/logs/kiroAgent")
+            })
+        } else {
+            None
+        };
+
+        Self {
+            enabled: default_logwatch_enabled(),
+            analyzer_tool: default_analyzer_tool(),
+            analysis_interval_secs: default_analysis_interval(),
+            max_log_lines: default_max_log_lines(),
+            claude_home,
+            kiro_logs_dir,
+            use_heuristic: false,
+            polling_enabled: default_polling_enabled(),
         }
     }
 }

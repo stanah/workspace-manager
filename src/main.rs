@@ -13,6 +13,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
+use workspace_manager::logwatch::{LogAnalyzer, LogCollector, collector::CollectorConfig, analyzer::AnalyzerConfig};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::InputDialogKind;
@@ -190,11 +191,25 @@ fn run_tui() -> Result<()> {
 
     // Start the notification listener in background
     let socket_path = notify::socket_path();
+    let notify_tx_clone = notify_tx.clone();
     runtime.spawn(async move {
-        if let Err(e) = notify::run_listener(&socket_path, notify_tx).await {
+        if let Err(e) = notify::run_listener(&socket_path, notify_tx_clone).await {
             tracing::error!("Notification listener error: {}", e);
         }
     });
+
+    // Start log watcher if enabled (event-driven)
+    let logwatch_trigger: Option<LogWatchTrigger> = if config.logwatch.enabled {
+        let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<String>(100);
+        let logwatch_tx = notify_tx.clone();
+        let logwatch_config = config.logwatch.clone();
+        runtime.spawn(async move {
+            run_logwatch(logwatch_config, logwatch_tx, trigger_rx).await;
+        });
+        Some(trigger_tx)
+    } else {
+        None
+    };
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -208,7 +223,7 @@ fn run_tui() -> Result<()> {
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx);
+    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx, logwatch_trigger, &runtime);
 
     // Clean up socket on exit
     let socket_path = notify::socket_path();
@@ -225,6 +240,172 @@ fn run_tui() -> Result<()> {
     result
 }
 
+/// Log analyzer that can be triggered on-demand
+struct LogWatchService {
+    collector: LogCollector,
+    analyzer: LogAnalyzer,
+    use_ai: bool,
+    tx: tokio::sync::mpsc::Sender<AppEvent>,
+}
+
+impl LogWatchService {
+    async fn new(
+        config: workspace_manager::app::LogWatchConfig,
+        tx: tokio::sync::mpsc::Sender<AppEvent>,
+    ) -> Self {
+        let collector_config = CollectorConfig {
+            claude_home: config.claude_home.clone(),
+            kiro_logs_dir: config.kiro_logs_dir.clone(),
+            max_lines: config.max_log_lines,
+            scan_interval_secs: config.analysis_interval_secs,
+            min_file_age_secs: 1,
+        };
+
+        let analyzer_config = AnalyzerConfig {
+            analyzer_tool: config.analyzer_tool.clone(),
+            timeout_secs: 30,
+            max_content_length: 50000,
+        };
+
+        let collector = LogCollector::new(collector_config);
+        let analyzer = LogAnalyzer::new(analyzer_config);
+
+        // Check if analyzer is available
+        let use_ai = !config.use_heuristic && analyzer.is_available().await;
+        if !use_ai {
+            tracing::info!("Using heuristic analysis (AI analyzer not available or disabled)");
+        }
+
+        Self {
+            collector,
+            analyzer,
+            use_ai,
+            tx,
+        }
+    }
+
+    /// Analyze logs for a specific project path (triggered by hooks)
+    async fn analyze_for_project(&mut self, project_path: &str) {
+        use workspace_manager::logwatch::analyzer::extract_status_heuristic;
+
+        tracing::info!("Analyzing logs for project: {}", project_path);
+
+        // Use read_for_project for direct access (event-driven)
+        match self.collector.read_for_project(project_path) {
+            Ok(Some(log)) => {
+                tracing::info!("Found log with {} lines", log.lines.len());
+
+                let status = if self.use_ai {
+                    match self.analyzer.analyze(&log).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!("AI analysis failed, using heuristic: {}", e);
+                            extract_status_heuristic(&log)
+                        }
+                    }
+                } else {
+                    extract_status_heuristic(&log)
+                };
+
+                tracing::info!("Analysis result: status={:?}, summary={:?}",
+                    status.status, status.summary);
+
+                let event = AppEvent::WorkspaceStatusAnalyzed {
+                    project_path: project_path.to_string(),
+                    status,
+                };
+                if self.tx.send(event).await.is_err() {
+                    tracing::warn!("Event receiver dropped");
+                }
+            }
+            Ok(None) => {
+                tracing::info!("No logs found for project: {}", project_path);
+            }
+            Err(e) => {
+                tracing::warn!("Log read error: {}", e);
+            }
+        }
+    }
+}
+
+/// Channel for triggering log analysis
+type LogWatchTrigger = tokio::sync::mpsc::Sender<String>;
+
+/// Run log watcher service that responds to triggers and does periodic polling
+async fn run_logwatch(
+    config: workspace_manager::app::LogWatchConfig,
+    tx: tokio::sync::mpsc::Sender<AppEvent>,
+    mut trigger_rx: tokio::sync::mpsc::Receiver<String>,
+) {
+    use workspace_manager::logwatch::analyzer::extract_status_heuristic;
+
+    let mut service = LogWatchService::new(config.clone(), tx.clone()).await;
+    let poll_interval = Duration::from_secs(config.analysis_interval_secs);
+
+    if config.polling_enabled {
+        tracing::info!("Log watch service started (hybrid mode: events + polling every {}s)", config.analysis_interval_secs);
+    } else {
+        tracing::info!("Log watch service started (event-driven only, polling disabled)");
+    }
+
+    // Spawn polling task only if enabled
+    let polling_handle = if config.polling_enabled {
+        let poll_tx = tx.clone();
+        let poll_config = config.clone();
+        Some(tokio::spawn(async move {
+            let collector_config = CollectorConfig {
+                claude_home: poll_config.claude_home.clone(),
+                kiro_logs_dir: poll_config.kiro_logs_dir.clone(),
+                max_lines: poll_config.max_log_lines,
+                scan_interval_secs: poll_config.analysis_interval_secs,
+                min_file_age_secs: 1,
+            };
+            let mut collector = LogCollector::new(collector_config);
+
+            loop {
+                tokio::time::sleep(poll_interval).await;
+
+                match collector.scan() {
+                    Ok(logs) => {
+                        for log in logs {
+                            let project_path = log.project_path.clone().unwrap_or_default();
+                            if project_path.is_empty() {
+                                continue;
+                            }
+
+                            let status = extract_status_heuristic(&log);
+
+                            let event = AppEvent::WorkspaceStatusAnalyzed {
+                                project_path,
+                                status,
+                            };
+                            if poll_tx.send(event).await.is_err() {
+                                tracing::warn!("Poll receiver dropped");
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Poll scan error: {}", e);
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Handle event-driven triggers
+    while let Some(project_path) = trigger_rx.recv().await {
+        service.analyze_for_project(&project_path).await;
+    }
+
+    if let Some(handle) = polling_handle {
+        handle.abort();
+    }
+    tracing::info!("Log watch service stopped");
+}
+
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -232,6 +413,8 @@ fn run_app(
     config: &mut Config,
     worktree_manager: &WorktreeManager,
     mut notify_rx: tokio::sync::mpsc::Receiver<AppEvent>,
+    logwatch_trigger: Option<LogWatchTrigger>,
+    runtime: &tokio::runtime::Runtime,
 ) -> Result<()> {
     // 起動直後に即座にポーリングするため10から開始
     let mut tick_count = 10u8;
@@ -242,6 +425,30 @@ fn run_app(
     loop {
         // Check for notify events (non-blocking)
         while let Ok(event) = notify_rx.try_recv() {
+            // Trigger log analysis for relevant events
+            if let Some(ref trigger) = logwatch_trigger {
+                let path_to_analyze: Option<String> = match &event {
+                    AppEvent::WorkspaceRegister { project_path, .. } => {
+                        Some(project_path.clone())
+                    }
+                    AppEvent::WorkspaceUpdate { session_id, .. } => {
+                        // Find project path from session_id
+                        state.workspaces.iter()
+                            .find(|w| w.session_id.as_ref() == Some(session_id))
+                            .map(|w| w.project_path.clone())
+                    }
+                    _ => None,
+                };
+
+                if let Some(path) = path_to_analyze {
+                    let trigger_clone = trigger.clone();
+                    runtime.spawn(async move {
+                        // Small delay to let log files be written
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        let _ = trigger_clone.send(path).await;
+                    });
+                }
+            }
             handle_notify_event(state, event);
         }
 
@@ -605,6 +812,27 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
                 ws.session_id = None;
                 ws.status = WorkspaceStatus::Disconnected;
                 ws.updated_at = std::time::SystemTime::now();
+            }
+        }
+        AppEvent::WorkspaceStatusAnalyzed { project_path, status } => {
+            tracing::debug!(
+                "AI status update: path={}, status={:?}",
+                project_path,
+                status.status
+            );
+            // Find workspace by project_path and update AI status
+            let normalized_path = normalize_path(&project_path);
+            if let Some(ws) = state
+                .workspaces
+                .iter_mut()
+                .find(|w| normalize_path(&w.project_path) == normalized_path)
+            {
+                ws.update_from_ai_status(&status);
+                tracing::debug!(
+                    "Updated workspace {} with AI status: {:?}",
+                    ws.repo_name,
+                    ws.ai_summary
+                );
             }
         }
         _ => {}

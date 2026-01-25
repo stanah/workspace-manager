@@ -24,6 +24,11 @@ pub enum AppEvent {
     },
     /// ワークスペース登録解除
     WorkspaceUnregister { session_id: String },
+    /// AI解析によるリッチステータス更新
+    WorkspaceStatusAnalyzed {
+        project_path: String,
+        status: crate::logwatch::SessionStatus,
+    },
     /// リフレッシュ要求
     Refresh,
     /// 終了要求

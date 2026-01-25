@@ -80,15 +80,39 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     (false, false) => Style::default(),
                 };
 
-                Row::new(vec![
-                    Line::from(vec![
-                        Span::styled("  ", Style::default()),
-                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                        Span::styled(status_icon, status_style),
-                        Span::styled(ws.branch.clone(), name_style),
-                    ]),
-                ])
-                .height(1)
+                // AI解析結果があれば表示
+                let ai_info = if let Some(ref summary) = ws.ai_summary {
+                    let detail = ws.ai_state_detail.as_deref().unwrap_or("");
+                    let time = ws.ai_last_activity.as_deref().unwrap_or("");
+                    // フォーマット: [detail] summary (time)
+                    let info = if !detail.is_empty() && !time.is_empty() {
+                        format!(" [{}] {} ({})", detail, summary, time)
+                    } else if !detail.is_empty() {
+                        format!(" [{}] {}", detail, summary)
+                    } else if !time.is_empty() {
+                        format!(" {} ({})", summary, time)
+                    } else {
+                        format!(" {}", summary)
+                    };
+                    Some(info)
+                } else {
+                    None
+                };
+
+                let mut spans = vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(status_icon, status_style),
+                    Span::styled(ws.branch.clone(), name_style),
+                ];
+
+                // AI情報を追加
+                if let Some(info) = ai_info {
+                    spans.push(Span::styled(info, Style::default().fg(Color::DarkGray)));
+                }
+
+                Row::new(vec![Line::from(spans)])
+                    .height(1)
             } else {
                 Row::new(vec![Line::from("  └ <invalid>")])
                 .height(1)
