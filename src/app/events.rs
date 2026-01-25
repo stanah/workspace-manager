@@ -67,6 +67,8 @@ pub enum Action {
     CreateWorktree,
     /// worktree削除
     DeleteWorktree,
+    /// エディタで開く
+    OpenInEditor,
     /// マウスクリックで行選択
     MouseSelect(u16),
     /// マウススクロール上
@@ -103,6 +105,8 @@ impl From<KeyEvent> for Action {
             // Worktree管理
             (KeyCode::Char('c'), _) | (KeyCode::Char('a'), _) => Action::CreateWorktree,
             (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
+            // エディタで開く
+            (KeyCode::Char('e'), _) => Action::OpenInEditor,
             // Zellijアクション
             (KeyCode::Char('l'), _) => Action::LaunchLazygit,
             (KeyCode::Char('g'), _) => Action::LaunchShell,

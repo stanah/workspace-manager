@@ -604,6 +604,22 @@ fn handle_action(
         Action::DeleteWorktree => {
             state.open_delete_worktree_dialog();
         }
+        Action::OpenInEditor => {
+            if let Some(ws) = state.selected_workspace() {
+                let path = &ws.project_path;
+                match std::process::Command::new(&config.editor)
+                    .arg(path)
+                    .spawn()
+                {
+                    Ok(_) => {
+                        state.status_message = Some(format!("Opened in {}: {}", config.editor, path));
+                    }
+                    Err(e) => {
+                        state.status_message = Some(format!("Failed to open editor: {}", e));
+                    }
+                }
+            }
+        }
         Action::LaunchLazygit => {
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_available() {

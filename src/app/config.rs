@@ -151,10 +151,17 @@ pub struct Config {
     pub socket_path: PathBuf,
     /// ログレベル
     pub log_level: String,
+    /// エディタコマンド（code, cursor, vim など）
+    #[serde(default = "default_editor")]
+    pub editor: String,
     /// Zellij連携設定
     pub zellij: ZellijConfig,
     /// Worktree設定
     pub worktree: WorktreeConfig,
+}
+
+fn default_editor() -> String {
+    "code".to_string()
 }
 
 impl Default for Config {
@@ -166,6 +173,7 @@ impl Default for Config {
             max_scan_depth: 3,
             socket_path,
             log_level: "info".to_string(),
+            editor: default_editor(),
             zellij: ZellijConfig::default(),
             worktree: WorktreeConfig::default(),
         }

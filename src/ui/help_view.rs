@@ -83,6 +83,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from(vec![
+            Span::styled("  e    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Open in editor"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Toggle this help"),
         ]),
