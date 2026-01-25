@@ -6,6 +6,8 @@ use ratatui::{
     Frame,
 };
 
+use super::centered_rect;
+
 /// 選択ダイアログの種類
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectionDialogKind {
@@ -77,11 +79,6 @@ impl SelectionDialog {
     /// 選択中のアイテムを取得
     pub fn selected_item(&self) -> Option<&str> {
         self.items.get(self.selected_index).map(|s| s.as_str())
-    }
-
-    /// アイテム数を取得
-    pub fn item_count(&self) -> usize {
-        self.items.len()
     }
 }
 
@@ -159,20 +156,4 @@ pub fn render(frame: &mut Frame, area: Rect, dialog: &SelectionDialog) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     frame.render_widget(block, popup_area);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(popup_layout[1])[1]
 }

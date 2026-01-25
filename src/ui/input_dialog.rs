@@ -5,6 +5,8 @@ use ratatui::{
     Frame,
 };
 
+use super::centered_rect;
+
 /// 入力ダイアログの種類
 #[derive(Debug, Clone)]
 pub enum InputDialogKind {
@@ -78,13 +80,6 @@ impl InputDialog {
         if self.cursor_position < self.input.len() {
             self.cursor_position += 1;
         }
-    }
-
-    /// 入力をクリア
-    pub fn clear(&mut self) {
-        self.input.clear();
-        self.cursor_position = 0;
-        self.error_message = None;
     }
 
     /// エラーメッセージを設定
@@ -171,20 +166,4 @@ pub fn render(frame: &mut Frame, area: Rect, dialog: &InputDialog) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     frame.render_widget(block, popup_area);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(popup_layout[1])[1]
 }
