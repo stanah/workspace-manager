@@ -1,10 +1,12 @@
 pub mod detail_view;
 pub mod help_view;
 pub mod input_dialog;
+pub mod selection_dialog;
 pub mod status_bar;
 pub mod workspace_list;
 
 pub use input_dialog::InputDialog;
+pub use selection_dialog::{SelectionDialog, SelectionDialogKind, SelectionContext};
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -43,6 +45,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         ViewMode::Input => {
             if let Some(ref dialog) = state.input_dialog {
                 input_dialog::render(frame, area, dialog);
+            }
+        }
+        ViewMode::Selection => {
+            if let Some(ref dialog) = state.selection_dialog {
+                selection_dialog::render(frame, area, dialog);
             }
         }
         ViewMode::List => {}

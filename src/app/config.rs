@@ -151,8 +151,8 @@ pub struct Config {
     pub socket_path: PathBuf,
     /// ログレベル
     pub log_level: String,
-    /// Zellijモード有効化
-    pub zellij_enabled: bool,
+    /// Zellij連携設定
+    pub zellij: ZellijConfig,
     /// Worktree設定
     pub worktree: WorktreeConfig,
 }
@@ -166,7 +166,7 @@ impl Default for Config {
             max_scan_depth: 3,
             socket_path,
             log_level: "info".to_string(),
-            zellij_enabled: std::env::var("ZELLIJ").is_ok(),
+            zellij: ZellijConfig::default(),
             worktree: WorktreeConfig::default(),
         }
     }
@@ -216,15 +216,42 @@ mod dirs {
     }
 }
 
-// tomlクレートが依存に無いので、Phase 4で追加
-mod toml {
-    use serde::{Deserialize, Serialize};
+/// Zellij連携設定
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZellijConfig {
+    /// Zellij連携を有効にするか
+    pub enabled: bool,
+    /// 対象セッション名（未設定時は選択ダイアログを表示）
+    pub session_name: Option<String>,
+    /// デフォルトレイアウトファイル
+    pub default_layout: Option<PathBuf>,
+    /// レイアウトディレクトリ（選択用）
+    pub layout_dir: Option<PathBuf>,
+    /// タブ名テンプレート（{repo}, {branch} を置換）
+    pub tab_name_template: String,
+}
 
-    pub fn from_str<'de, T: Deserialize<'de>>(_s: &'de str) -> Result<T, String> {
-        Err("TOML parsing not implemented yet".to_string())
+impl Default for ZellijConfig {
+    fn default() -> Self {
+        let layout_dir = directories::ProjectDirs::from("", "", "zellij")
+            .map(|d| d.config_dir().join("layouts"))
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config/zellij/layouts")));
+
+        Self {
+            enabled: true,
+            session_name: None,
+            default_layout: None,
+            layout_dir,
+            tab_name_template: "{repo}/{branch}".to_string(),
+        }
     }
+}
 
-    pub fn to_string_pretty<T: Serialize>(_value: &T) -> Result<String, std::fmt::Error> {
-        Ok("# Configuration not yet implemented\n".to_string())
+impl ZellijConfig {
+    /// テンプレートからタブ名を生成
+    pub fn generate_tab_name(&self, repo: &str, branch: &str) -> String {
+        self.tab_name_template
+            .replace("{repo}", repo)
+            .replace("{branch}", branch)
     }
 }

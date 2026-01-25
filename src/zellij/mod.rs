@@ -1,3 +1,3 @@
 pub mod actions;
 
-pub use actions::ZellijActions;
+pub use actions::{TabActionResult, ZellijActions, ZellijMode};

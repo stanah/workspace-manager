@@ -1,7 +1,7 @@
 use crate::workspace::{Workspace, WorkspaceStatus, WorktreeManager, scan_for_repositories, get_default_search_paths};
 use std::collections::{HashMap, HashSet};
 
-use crate::ui::InputDialog;
+use crate::ui::{InputDialog, SelectionDialog, SelectionDialogKind, SelectionContext};
 
 /// アプリケーションの表示モード
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -12,6 +12,8 @@ pub enum ViewMode {
     Detail,
     /// 入力ダイアログ表示中
     Input,
+    /// 選択ダイアログ表示中
+    Selection,
 }
 
 /// リスト表示モード（ブランチ表示の有無）
@@ -88,6 +90,8 @@ pub struct AppState {
     pub list_display_mode: ListDisplayMode,
     /// 入力ダイアログ状態
     pub input_dialog: Option<InputDialog>,
+    /// 選択ダイアログ状態
+    pub selection_dialog: Option<SelectionDialog>,
     /// 終了フラグ
     pub should_quit: bool,
     /// ステータスバーメッセージ
@@ -106,6 +110,7 @@ impl AppState {
             view_mode: ViewMode::List,
             list_display_mode: ListDisplayMode::default(),
             input_dialog: None,
+            selection_dialog: None,
             should_quit: false,
             status_message: None,
         }
@@ -469,6 +474,53 @@ impl AppState {
     pub fn close_input_dialog(&mut self) {
         self.input_dialog = None;
         self.view_mode = ViewMode::List;
+    }
+
+    /// セッション選択ダイアログを開く
+    pub fn open_session_select_dialog(&mut self, sessions: Vec<String>, context: SelectionContext) {
+        self.selection_dialog = Some(SelectionDialog::new_session_select(sessions, context));
+        self.view_mode = ViewMode::Selection;
+    }
+
+    /// レイアウト選択ダイアログを開く
+    pub fn open_layout_select_dialog(&mut self, layouts: Vec<String>, context: SelectionContext) {
+        self.selection_dialog = Some(SelectionDialog::new_layout_select(layouts, context));
+        self.view_mode = ViewMode::Selection;
+    }
+
+    /// 選択ダイアログを閉じる
+    pub fn close_selection_dialog(&mut self) {
+        self.selection_dialog = None;
+        self.view_mode = ViewMode::List;
+    }
+
+    /// 選択ダイアログの選択を上に移動
+    pub fn selection_move_up(&mut self) {
+        if let Some(ref mut dialog) = self.selection_dialog {
+            dialog.move_up();
+        }
+    }
+
+    /// 選択ダイアログの選択を下に移動
+    pub fn selection_move_down(&mut self) {
+        if let Some(ref mut dialog) = self.selection_dialog {
+            dialog.move_down();
+        }
+    }
+
+    /// 選択ダイアログで選択されたアイテムを取得
+    pub fn get_selected_dialog_item(&self) -> Option<&str> {
+        self.selection_dialog.as_ref().and_then(|d| d.selected_item())
+    }
+
+    /// 選択ダイアログの種類を取得
+    pub fn selection_dialog_kind(&self) -> Option<&SelectionDialogKind> {
+        self.selection_dialog.as_ref().map(|d| &d.kind)
+    }
+
+    /// 選択ダイアログのコンテキストを取得
+    pub fn selection_dialog_context(&self) -> Option<&SelectionContext> {
+        self.selection_dialog.as_ref().and_then(|d| d.context.as_ref())
     }
 
     /// 選択中のリポジトリグループのパスを取得

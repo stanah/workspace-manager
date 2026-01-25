@@ -39,6 +39,8 @@ pub enum Action {
     MoveDown,
     /// 選択（フォーカス）
     Select,
+    /// レイアウトを選択して開く（Cmd+Enter / Ctrl+Shift+Enter）
+    SelectWithLayout,
     /// 展開/折りたたみ切り替え
     ToggleExpand,
     /// 戻る/閉じる
@@ -81,6 +83,9 @@ impl From<KeyEvent> for Action {
             // 移動
             (KeyCode::Up | KeyCode::Char('k'), _) => Action::MoveUp,
             (KeyCode::Down | KeyCode::Char('j'), _) => Action::MoveDown,
+            // レイアウト選択して開く (Cmd+Enter on macOS, Ctrl+Shift+Enter)
+            (KeyCode::Enter, m) if m.contains(KeyModifiers::SUPER) => Action::SelectWithLayout,
+            (KeyCode::Enter, m) if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) => Action::SelectWithLayout,
             // 選択
             (KeyCode::Enter, _) => Action::Select,
             // 展開/折りたたみ
