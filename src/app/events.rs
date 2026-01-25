@@ -83,14 +83,12 @@ impl From<KeyEvent> for Action {
             // 移動
             (KeyCode::Up | KeyCode::Char('k'), _) => Action::MoveUp,
             (KeyCode::Down | KeyCode::Char('j'), _) => Action::MoveDown,
-            // レイアウト選択して開く (Cmd+Enter on macOS, Ctrl+Shift+Enter)
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::SUPER) => Action::SelectWithLayout,
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) => Action::SelectWithLayout,
+            // レイアウト選択して開く (Tab)
+            (KeyCode::Tab, _) => Action::SelectWithLayout,
             // 選択
             (KeyCode::Enter, _) => Action::Select,
             // 展開/折りたたみ
             (KeyCode::Char(' '), _) => Action::ToggleExpand,
-            (KeyCode::Tab, _) => Action::ToggleExpand,
             // ヘルプ
             (KeyCode::Char('?'), _) => Action::ToggleHelp,
             // 表示モード切り替え

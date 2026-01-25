@@ -259,13 +259,14 @@ pub struct ZellijConfig {
     pub layout_dir: Option<PathBuf>,
     /// タブ名テンプレート（{repo}, {branch} を置換）
     pub tab_name_template: String,
+    /// AIコマンド（claude, kiro-cli, codex など）
+    pub ai_command: String,
 }
 
 impl Default for ZellijConfig {
     fn default() -> Self {
-        let layout_dir = directories::ProjectDirs::from("", "", "zellij")
-            .map(|d| d.config_dir().join("layouts"))
-            .or_else(|| dirs::home_dir().map(|h| h.join(".config/zellij/layouts")));
+        // workspace-manager のレイアウトディレクトリを使用
+        let layout_dir = dirs::home_dir().map(|h| h.join(".config/workspace-manager/layouts"));
 
         Self {
             enabled: true,
@@ -273,6 +274,7 @@ impl Default for ZellijConfig {
             default_layout: None,
             layout_dir,
             tab_name_template: "{repo}/{branch}".to_string(),
+            ai_command: "claude".to_string(),
         }
     }
 }
@@ -283,5 +285,39 @@ impl ZellijConfig {
         self.tab_name_template
             .replace("{repo}", repo)
             .replace("{branch}", branch)
+    }
+
+    /// レイアウトディレクトリを取得（なければ作成）
+    pub fn ensure_layout_dir(&self) -> Result<PathBuf> {
+        let layout_dir = self.layout_dir.clone()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config/workspace-manager/layouts")))
+            .ok_or_else(|| anyhow::anyhow!("Failed to determine layout directory"))?;
+
+        if !layout_dir.exists() {
+            std::fs::create_dir_all(&layout_dir)?;
+        }
+
+        Ok(layout_dir)
+    }
+
+    /// 組み込みレイアウトをテンプレートから生成
+    pub fn generate_builtin_layouts(&self) -> Result<()> {
+        let layout_dir = self.ensure_layout_dir()?;
+        let ai_cmd = &self.ai_command;
+
+        // 組み込みテンプレート
+        let templates = [
+            ("simple", include_str!("../../layouts/simple.kdl.template")),
+            ("with-shell", include_str!("../../layouts/with-shell.kdl.template")),
+            ("dev", include_str!("../../layouts/dev.kdl.template")),
+        ];
+
+        for (name, template) in templates {
+            let content = template.replace("{{AI_COMMAND}}", ai_cmd);
+            let path = layout_dir.join(format!("{}.kdl", name));
+            std::fs::write(&path, content)?;
+        }
+
+        Ok(())
     }
 }

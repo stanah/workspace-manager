@@ -109,6 +109,11 @@ fn run_tui() -> Result<()> {
     // 設定を先に読み込む（ファイルがなければ作成）
     let mut config = Config::load().unwrap_or_default();
 
+    // 組み込みレイアウトを生成
+    if let Err(e) = config.zellij.generate_builtin_layouts() {
+        tracing::warn!("Failed to generate layouts: {}", e);
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;

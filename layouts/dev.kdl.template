@@ -1,0 +1,24 @@
+layout {
+    pane size=1 borderless=true {
+        plugin location="tab-bar"
+    }
+    pane split_direction="vertical" {
+        pane split_direction="horizontal" size="25%" {
+            pane size="60%" {
+                command "yazi"
+            }
+            pane size="40%" {
+                command "lazygit"
+            }
+        }
+        pane split_direction="horizontal" size="75%" {
+            pane size="70%" {
+                command "{{AI_COMMAND}}"
+            }
+            pane size="30%"
+        }
+    }
+    pane size=2 borderless=true {
+        plugin location="status-bar"
+    }
+}
