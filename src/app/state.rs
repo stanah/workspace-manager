@@ -400,11 +400,22 @@ impl AppState {
             .and_then(|&idx| self.sessions.get_mut(idx))
     }
 
-    /// ワークスペースのセッション一覧を取得
+    /// ワークスペースのセッション一覧を取得（切断されたセッションは除外）
     pub fn sessions_for_workspace(&self, workspace_index: usize) -> Vec<usize> {
         self.sessions_by_workspace
             .get(&workspace_index)
-            .cloned()
+            .map(|indices| {
+                indices
+                    .iter()
+                    .filter(|&&idx| {
+                        self.sessions
+                            .get(idx)
+                            .map(|s| s.is_active())
+                            .unwrap_or(false)
+                    })
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

@@ -419,7 +419,6 @@ async fn run_logwatch(
 
                 // Remove sessions that are no longer active (Kiro: immediate removal)
                 for external_id in prev_active_sessions.difference(&current_active_sessions) {
-                    tracing::debug!("Kiro session removed: {}", external_id);
                     let event = AppEvent::SessionUnregister {
                         external_id: external_id.clone(),
                     };
@@ -878,6 +877,7 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
         AppEvent::SessionUnregister { external_id } => {
             tracing::info!("Session unregistered: external_id={}", external_id);
             state.remove_session(&external_id);
+            state.rebuild_tree();
         }
         AppEvent::SessionStatusAnalyzed {
             external_id,
