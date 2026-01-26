@@ -297,20 +297,17 @@ impl KiroSqliteFetcher {
         Ok(statuses.into_iter().next())
     }
 
-    /// Get sessions for a workspace that have been updated recently
+    /// Get the N most recently updated sessions for a workspace (N = process_count)
     fn get_all_statuses_with_conn(&self, conn: &Connection, workspace_path: &str, process_count: usize) -> Result<Vec<KiroStatus>> {
-        // Query conversations updated in the last 10 minutes (active sessions)
-        let ten_minutes_ago_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64 - 600_000)  // 10 minutes = 600,000 ms
-            .unwrap_or(0);
-
+        // Get the most recent N sessions sorted by updated_at
+        // When a session is resumed and a message is sent, updated_at is updated,
+        // so it will appear in the most recent sessions
         let mut stmt = conn.prepare_cached(
-            "SELECT conversation_id, value, updated_at FROM conversations_v2 WHERE key = ? AND updated_at > ? ORDER BY updated_at DESC"
+            "SELECT conversation_id, value, updated_at FROM conversations_v2 WHERE key = ? ORDER BY updated_at DESC LIMIT ?"
         )?;
 
         let mut results = Vec::new();
-        let rows = stmt.query_map(rusqlite::params![workspace_path, ten_minutes_ago_ms], |row| {
+        let rows = stmt.query_map(rusqlite::params![workspace_path, process_count as i64], |row| {
             Ok((
                 row.get::<_, String>(0)?,  // conversation_id
                 row.get::<_, String>(1)?,  // value

@@ -18,7 +18,7 @@ use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::{InputDialog, InputDialogKind};
 use workspace_manager::ui::selection_dialog::{SelectionContext, SelectionDialogKind};
-use workspace_manager::workspace::{AiTool, SessionStatus, WorktreeManager};
+use workspace_manager::workspace::{AiTool, WorktreeManager};
 use workspace_manager::zellij::{TabActionResult, ZellijActions};
 
 /// Workspace Manager - TUI for managing Claude Code workspaces
@@ -343,13 +343,11 @@ async fn run_logwatch(
                     }
                 }
 
-                // Send Disconnected for sessions that were active but are no longer
+                // Remove sessions that are no longer active (immediate removal)
                 for external_id in prev_active_sessions.difference(&current_active_sessions) {
-                    tracing::debug!("Claude session disconnected: {}", external_id);
-                    let event = AppEvent::SessionUpdate {
+                    tracing::debug!("Claude session removed: {}", external_id);
+                    let event = AppEvent::SessionUnregister {
                         external_id: external_id.clone(),
-                        status: SessionStatus::Disconnected,
-                        message: Some("Process ended".to_string()),
                     };
                     if poll_tx.send(event).await.is_err() {
                         tracing::warn!("Claude poll receiver dropped");
@@ -387,10 +385,7 @@ async fn run_logwatch(
                 kiro_fetcher.db_path()
             );
 
-            // Track session timestamps to detect which sessions are actually being updated
-            let mut prev_session_timestamps: std::collections::HashMap<String, std::time::SystemTime> =
-                std::collections::HashMap::new();
-            // Track sessions that have been active (updated at least once)
+            // Track active sessions to detect disconnections
             let mut prev_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
             loop {
@@ -403,59 +398,30 @@ async fn run_logwatch(
                     continue;
                 }
 
-                // Get running Kiro workspaces with process counts
-                let running = kiro_fetcher.get_running_kiro_workspaces();
-
-                // Fetch all recent sessions from Kiro SQLite
+                // Fetch sessions from Kiro SQLite (already limited to process_count per workspace)
                 let mut current_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
-                let mut current_timestamps: std::collections::HashMap<String, std::time::SystemTime> =
-                    std::collections::HashMap::new();
 
                 for (path, status) in kiro_fetcher.get_statuses(&workspaces) {
                     let external_id = status.external_id(&path);
-                    let updated_at = status.updated_at;
+                    current_active_sessions.insert(external_id.clone());
 
-                    // Check if this session's timestamp has changed (meaning it's active)
-                    let prev_ts = prev_session_timestamps.get(&external_id);
-                    let is_updated = prev_ts.map_or(true, |&ts| updated_at > ts);
-
-                    // Get process count for this workspace
-                    let process_count = running.get(&path).copied().unwrap_or(0);
-
-                    // Count how many sessions we've already marked active for this workspace
-                    let active_for_workspace = current_active_sessions.iter()
-                        .filter(|id| id.starts_with(&format!("kiro:{}:", path)))
-                        .count();
-
-                    // Include if: updated recently OR we haven't reached process count yet
-                    let should_include = process_count > 0 &&
-                        (is_updated || active_for_workspace < process_count);
-
-                    current_timestamps.insert(external_id.clone(), updated_at);
-
-                    if should_include && active_for_workspace < process_count {
-                        current_active_sessions.insert(external_id.clone());
-
-                        let session_status = status.to_session_status(&path);
-                        let event = AppEvent::SessionStatusAnalyzed {
-                            external_id,
-                            project_path: path,
-                            status: session_status,
-                        };
-                        if poll_tx.send(event).await.is_err() {
-                            tracing::warn!("Kiro poll receiver dropped");
-                            return;
-                        }
+                    let session_status = status.to_session_status(&path);
+                    let event = AppEvent::SessionStatusAnalyzed {
+                        external_id,
+                        project_path: path,
+                        status: session_status,
+                    };
+                    if poll_tx.send(event).await.is_err() {
+                        tracing::warn!("Kiro poll receiver dropped");
+                        return;
                     }
                 }
 
-                // Send Disconnected for sessions that were active but are no longer
+                // Remove sessions that are no longer active (Kiro: immediate removal)
                 for external_id in prev_active_sessions.difference(&current_active_sessions) {
-                    tracing::debug!("Kiro session disconnected: {}", external_id);
-                    let event = AppEvent::SessionUpdate {
+                    tracing::debug!("Kiro session removed: {}", external_id);
+                    let event = AppEvent::SessionUnregister {
                         external_id: external_id.clone(),
-                        status: SessionStatus::Disconnected,
-                        message: Some("Process ended".to_string()),
                     };
                     if poll_tx.send(event).await.is_err() {
                         tracing::warn!("Kiro poll receiver dropped");
@@ -464,7 +430,6 @@ async fn run_logwatch(
                 }
 
                 prev_active_sessions = current_active_sessions;
-                prev_session_timestamps = current_timestamps;
             }
         }))
     } else {
