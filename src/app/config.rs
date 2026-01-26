@@ -247,7 +247,8 @@ fn default_kiro_polling_interval() -> u64 {
 }
 
 fn default_kiro_db_path() -> PathBuf {
-    dirs::home_dir()
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("Library/Application Support/kiro-cli/data.sqlite3")
 }
@@ -273,7 +274,8 @@ fn default_max_log_lines() -> usize {
 }
 
 fn default_claude_home() -> PathBuf {
-    dirs::home_dir()
+    directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".claude")
 }
@@ -284,8 +286,8 @@ impl Default for LogWatchConfig {
 
         // Kiro logs on macOS (legacy)
         let kiro_logs_dir = if cfg!(target_os = "macos") {
-            dirs::home_dir().map(|h| {
-                h.join("Library/Application Support/Kiro/logs/kiroAgent")
+            directories::BaseDirs::new().map(|d| {
+                d.home_dir().join("Library/Application Support/Kiro/logs/kiroAgent")
             })
         } else {
             None
