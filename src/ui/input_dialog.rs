@@ -14,6 +14,8 @@ pub enum InputDialogKind {
     CreateWorktree,
     /// worktree削除確認
     DeleteWorktree { path: String },
+    /// ブランチフィルター
+    FilterBranches,
 }
 
 /// 入力ダイアログの状態
@@ -40,6 +42,17 @@ impl InputDialog {
             kind: InputDialogKind::DeleteWorktree { path },
             input: String::new(),
             cursor_position: 0,
+            error_message: None,
+        }
+    }
+
+    pub fn new_filter_branches(current_filter: Option<String>) -> Self {
+        let input = current_filter.unwrap_or_default();
+        let cursor_position = input.len();
+        Self {
+            kind: InputDialogKind::FilterBranches,
+            input,
+            cursor_position,
             error_message: None,
         }
     }
@@ -103,6 +116,11 @@ pub fn render(frame: &mut Frame, area: Rect, dialog: &InputDialog) {
             " Delete Worktree ".to_string(),
             format!("Delete {}?", path),
             "y: confirm | n/Esc: cancel".to_string(),
+        ),
+        InputDialogKind::FilterBranches => (
+            " Filter Branches ".to_string(),
+            "Filter:".to_string(),
+            "Enter: apply | Esc: clear & close".to_string(),
         ),
     };
 

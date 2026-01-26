@@ -84,6 +84,10 @@ pub enum Action {
     MouseDoubleClick(u16),
     /// マウスミドルクリックで行選択＋ワークスペース閉じる
     MouseMiddleClick(u16),
+    /// ブランチフィルター
+    FilterBranches,
+    /// フィルタークリア
+    ClearFilter,
     /// 何もしない
     None,
 }
@@ -124,6 +128,8 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('y'), _) => Action::LaunchYazi,
             (KeyCode::Char('n'), _) => Action::NewSession,
             (KeyCode::Char('x'), _) => Action::CloseWorkspace,
+            // ブランチフィルター
+            (KeyCode::Char('/'), _) => Action::FilterBranches,
             // その他
             _ => Action::None,
         }

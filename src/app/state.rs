@@ -98,6 +98,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     /// Zellijで開いているタブ名のキャッシュ
     open_tabs: HashSet<String>,
+    /// ブランチフィルター（検索文字列）
+    pub branch_filter: Option<String>,
 }
 
 impl AppState {
@@ -116,6 +118,7 @@ impl AppState {
             should_quit: false,
             status_message: None,
             open_tabs: HashSet::new(),
+            branch_filter: None,
         }
     }
 
@@ -188,20 +191,38 @@ impl AppState {
             // ブランチ情報を取得
             let (local_branches, remote_branches) = if self.list_display_mode != ListDisplayMode::Worktrees {
                 if let Some(manager) = worktree_manager {
+                    // フィルターを適用するクロージャ
+                    let filter_ref = self.branch_filter.as_ref();
+                    let matches_filter = |b: &String| -> bool {
+                        match filter_ref {
+                            Some(filter) if !filter.is_empty() => {
+                                b.to_lowercase().contains(&filter.to_lowercase())
+                            }
+                            _ => true,
+                        }
+                    };
+
                     let local = manager
                         .list_local_branches(std::path::Path::new(&repo_path))
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|b| !existing_branches.contains(b))
+                        .filter(|b| !existing_branches.contains(b) && matches_filter(b))
                         .collect::<Vec<_>>();
 
                     let remote = if self.list_display_mode == ListDisplayMode::WithAllBranches {
-                        manager
+                        let max_branches = manager.config().max_remote_branches;
+                        let branches: Vec<_> = manager
                             .list_remote_branches(std::path::Path::new(&repo_path))
                             .unwrap_or_default()
                             .into_iter()
-                            .filter(|b| !existing_branches.contains(b) && !local.contains(b))
-                            .collect::<Vec<_>>()
+                            .filter(|b| !existing_branches.contains(b) && !local.contains(b) && matches_filter(b))
+                            .collect();
+                        // 上限を適用（0は無制限）
+                        if max_branches > 0 && branches.len() > max_branches {
+                            branches.into_iter().take(max_branches).collect()
+                        } else {
+                            branches
+                        }
                     } else {
                         Vec::new()
                     };

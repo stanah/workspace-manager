@@ -15,6 +15,11 @@ impl WorktreeManager {
         Self { config }
     }
 
+    /// 設定への参照を取得
+    pub fn config(&self) -> &WorktreeConfig {
+        &self.config
+    }
+
     /// 新しいworktreeを作成
     pub fn create_worktree(
         &self,

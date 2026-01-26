@@ -41,6 +41,14 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::styled("  r    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Refresh workspace list"),
         ]),
+        Line::from(vec![
+            Span::styled("  v    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Toggle view mode (Worktrees/+Local/+All)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Filter branches"),
+        ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Worktree Management", Style::default().add_modifier(Modifier::BOLD)),

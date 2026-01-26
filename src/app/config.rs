@@ -32,6 +32,13 @@ pub struct WorktreeConfig {
     pub ghq_root: Option<PathBuf>,
     /// デフォルトのリモート
     pub default_remote: String,
+    /// リモートブランチの最大表示数（0で無制限）
+    #[serde(default = "default_max_remote_branches")]
+    pub max_remote_branches: usize,
+}
+
+fn default_max_remote_branches() -> usize {
+    10
 }
 
 impl Default for WorktreeConfig {
@@ -48,6 +55,7 @@ impl Default for WorktreeConfig {
             path_style: WorktreePathStyle::Parallel,
             ghq_root,
             default_remote: "origin".to_string(),
+            max_remote_branches: default_max_remote_branches(),
         }
     }
 }

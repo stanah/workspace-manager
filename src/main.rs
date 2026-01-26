@@ -16,7 +16,7 @@ use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, p
 use workspace_manager::logwatch::{KiroSqliteConfig, KiroSqliteFetcher};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
-use workspace_manager::ui::input_dialog::InputDialogKind;
+use workspace_manager::ui::input_dialog::{InputDialog, InputDialogKind};
 use workspace_manager::ui::selection_dialog::{SelectionContext, SelectionDialogKind};
 use workspace_manager::workspace::{WorkspaceStatus, WorktreeManager};
 use workspace_manager::zellij::{TabActionResult, ZellijActions};
@@ -503,7 +503,15 @@ fn handle_input_event(
 
     match key.code {
         KeyCode::Esc => {
-            state.close_input_dialog();
+            // FilterBranchesの場合はフィルターをクリア
+            if matches!(dialog_kind, Some(InputDialogKind::FilterBranches)) {
+                state.branch_filter = None;
+                state.close_input_dialog();
+                state.rebuild_tree_with_manager(Some(worktree_manager));
+                state.status_message = Some("Filter cleared".to_string());
+            } else {
+                state.close_input_dialog();
+            }
         }
         KeyCode::Enter => {
             match dialog_kind {
@@ -539,6 +547,17 @@ fn handle_input_event(
                 }
                 Some(InputDialogKind::DeleteWorktree { .. }) => {
                     // 'y'で確認する
+                }
+                Some(InputDialogKind::FilterBranches) => {
+                    let filter = dialog_input.unwrap_or_default().trim().to_string();
+                    state.branch_filter = if filter.is_empty() { None } else { Some(filter.clone()) };
+                    state.close_input_dialog();
+                    state.rebuild_tree_with_manager(Some(worktree_manager));
+                    if filter.is_empty() {
+                        state.status_message = Some("Filter cleared".to_string());
+                    } else {
+                        state.status_message = Some(format!("Filter: {}", filter));
+                    }
                 }
                 None => {}
             }
@@ -943,6 +962,15 @@ fn handle_action(
             state.toggle_display_mode();
             state.rebuild_tree_with_manager(Some(_worktree_manager));
             state.status_message = Some(format!("View: {}", state.list_display_mode.label()));
+        }
+        Action::FilterBranches => {
+            state.input_dialog = Some(InputDialog::new_filter_branches(state.branch_filter.clone()));
+            state.view_mode = ViewMode::Input;
+        }
+        Action::ClearFilter => {
+            state.branch_filter = None;
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
+            state.status_message = Some("Filter cleared".to_string());
         }
         Action::CreateWorktree => {
             // ブランチが選択されている場合は即座にworktree作成
