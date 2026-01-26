@@ -5,15 +5,17 @@
 //!
 //! ## Architecture
 //!
-//! - **Claude Code**: Uses hooks for event-driven status updates (no AI analysis, no polling)
-//! - **Kiro CLI**: Uses SQLite polling to read status from database (no hooks needed)
+//! - **Claude Code**: Uses sessions-index.json polling to read session status
+//! - **Kiro CLI**: Uses SQLite polling to read status from database
 
 pub mod analyzer;
+pub mod claude_sessions;
 pub mod collector;
 pub mod kiro_sqlite;
 pub mod schema;
 
 pub use analyzer::LogAnalyzer;
+pub use claude_sessions::{ClaudeSession, ClaudeSessionsConfig, ClaudeSessionsFetcher};
 pub use collector::LogCollector;
 pub use kiro_sqlite::{KiroSqliteConfig, KiroSqliteFetcher, KiroStatus};
 pub use schema::{AnalysisProgress, SessionStatus, StatusDetail, StatusState};

@@ -1,6 +1,8 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 
+use crate::workspace::{AiTool, SessionStatus};
+
 /// アプリケーション内部イベント
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -10,22 +12,26 @@ pub enum AppEvent {
     Mouse(MouseEvent),
     /// ターミナルリサイズ
     Resize(u16, u16),
-    /// ワークスペース状態更新（MCPから）
-    WorkspaceUpdate {
-        session_id: String,
-        status: crate::workspace::WorkspaceStatus,
-        message: Option<String>,
-    },
-    /// ワークスペース登録
-    WorkspaceRegister {
-        session_id: String,
+    /// セッション登録（新しいセッション管理用）
+    SessionRegister {
+        external_id: String,
         project_path: String,
+        tool: AiTool,
         pane_id: Option<u32>,
     },
-    /// ワークスペース登録解除
-    WorkspaceUnregister { session_id: String },
-    /// AI解析によるリッチステータス更新
-    WorkspaceStatusAnalyzed {
+    /// セッションステータス更新
+    SessionUpdate {
+        external_id: String,
+        status: SessionStatus,
+        message: Option<String>,
+    },
+    /// セッション登録解除
+    SessionUnregister {
+        external_id: String,
+    },
+    /// AI解析によるセッションステータス更新
+    SessionStatusAnalyzed {
+        external_id: String,
         project_path: String,
         status: crate::logwatch::SessionStatus,
     },

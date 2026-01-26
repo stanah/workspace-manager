@@ -56,7 +56,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         }
         ViewMode::Detail => {
             if let Some(ws) = state.selected_workspace() {
-                detail_view::render(frame, area, ws);
+                detail_view::render(frame, area, ws, state);
             }
         }
         ViewMode::Input => {

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{AppState, TreeItem};
+use crate::workspace::SessionStatus;
 
 /// ワークスペース一覧をツリー形式で描画
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -41,60 +42,60 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<'static> {
     match item {
-        TreeItem::RepoGroup { name, worktree_count, .. } => {
+        TreeItem::RepoGroup {
+            name,
+            worktree_count,
+            ..
+        } => {
             // リポジトリグループ行
             let name_style = Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD);
             let count_style = Style::default().fg(Color::DarkGray);
 
-            Row::new(vec![
-                Line::from(vec![
-                    Span::styled(name.clone(), name_style),
-                    Span::styled(format!(" ({})", worktree_count), count_style),
-                ]),
-            ])
+            Row::new(vec![Line::from(vec![
+                Span::styled(name.clone(), name_style),
+                Span::styled(format!(" ({})", worktree_count), count_style),
+            ])])
             .height(1)
         }
-        TreeItem::Worktree { workspace_index, is_last } => {
+        TreeItem::Worktree {
+            workspace_index,
+            is_last,
+        } => {
             // worktree行: ステータスアイコンをブランチ名の前に表示
             if let Some(ws) = state.workspaces.get(*workspace_index) {
                 let tree_prefix = if *is_last { "└ " } else { "├ " };
                 let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
 
-                // ステータスアイコンの色はAIツールのステータスを反映
+                // 集約ステータスを取得
+                let aggregate_status = state.workspace_aggregate_status(*workspace_index);
+
+                // ステータスアイコンの色はセッションのステータスを反映
                 // Disconnected状態でZellijで開いている場合は緑に
-                let status_color = if is_open && ws.status == crate::workspace::WorkspaceStatus::Disconnected {
-                    Color::Green
-                } else {
-                    ws.status.color()
-                };
+                let status_color =
+                    if is_open && aggregate_status == SessionStatus::Disconnected {
+                        Color::Green
+                    } else {
+                        aggregate_status.color()
+                    };
                 let status_style = Style::default().fg(status_color);
-                let status_icon = format!("{} ", ws.status.icon());
+                let status_icon = format!("{} ", aggregate_status.icon());
 
                 // ブランチ名のスタイル：開いていれば緑、選択中は太字
                 let name_style = match (is_selected, is_open) {
-                    (true, true) => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    (true, true) => Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                     (true, false) => Style::default().add_modifier(Modifier::BOLD),
                     (false, true) => Style::default().fg(Color::Green),
                     (false, false) => Style::default(),
                 };
 
-                // AI解析結果があれば表示
-                let ai_info = if let Some(ref summary) = ws.ai_summary {
-                    let detail = ws.ai_state_detail.as_deref().unwrap_or("");
-                    let time = ws.ai_last_activity.as_deref().unwrap_or("");
-                    // フォーマット: [detail] summary (time)
-                    let info = if !detail.is_empty() && !time.is_empty() {
-                        format!(" [{}] {} ({})", detail, summary, time)
-                    } else if !detail.is_empty() {
-                        format!(" [{}] {}", detail, summary)
-                    } else if !time.is_empty() {
-                        format!(" {} ({})", summary, time)
-                    } else {
-                        format!(" {}", summary)
-                    };
-                    Some(info)
+                // セッション数を表示
+                let session_count = state.sessions_for_workspace(*workspace_index).len();
+                let session_info = if session_count > 0 {
+                    Some(format!(" [{} session{}]", session_count, if session_count > 1 { "s" } else { "" }))
                 } else {
                     None
                 };
@@ -106,19 +107,58 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Span::styled(ws.branch.clone(), name_style),
                 ];
 
-                // AI情報を追加
-                if let Some(info) = ai_info {
+                // セッション数を追加
+                if let Some(info) = session_info {
                     spans.push(Span::styled(info, Style::default().fg(Color::DarkGray)));
                 }
 
-                Row::new(vec![Line::from(spans)])
-                    .height(1)
+                Row::new(vec![Line::from(spans)]).height(1)
             } else {
-                Row::new(vec![Line::from("  └ <invalid>")])
-                .height(1)
+                Row::new(vec![Line::from("  └ <invalid>")]).height(1)
             }
         }
-        TreeItem::Branch { name, is_local, is_last, .. } => {
+        TreeItem::Session {
+            session_index,
+            is_last,
+        } => {
+            // セッション行: ツールアイコンとステータスを表示
+            if let Some(session) = state.sessions.get(*session_index) {
+                let tree_prefix = if *is_last { "  └ " } else { "  ├ " };
+
+                // ツールアイコンとステータス
+                let tool_icon = session.tool.icon();
+                let tool_color = session.tool.color();
+                let status_color = session.status.color();
+                let status_icon = session.status.icon();
+
+                // セッション情報
+                let info = session.display_info();
+
+                let name_style = if is_selected {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                let spans = vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
+                    Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+                    Span::styled(info, name_style.fg(Color::DarkGray)),
+                ];
+
+                Row::new(vec![Line::from(spans)]).height(1)
+            } else {
+                Row::new(vec![Line::from("    └ <invalid session>")]).height(1)
+            }
+        }
+        TreeItem::Branch {
+            name,
+            is_local,
+            is_last,
+            ..
+        } => {
             // ブランチ行（worktree未作成）- 控えめな暗い色で表示
             let tree_prefix = if *is_last { "└ " } else { "├ " };
 
@@ -130,19 +170,19 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             };
 
             let name_style = if is_selected {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
 
-            Row::new(vec![
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                    Span::styled("  ", Style::default()), // アイコン分のスペース
-                    Span::styled(display_name, name_style),
-                ]),
-            ])
+            Row::new(vec![Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled("  ", Style::default()), // アイコン分のスペース
+                Span::styled(display_name, name_style),
+            ])])
             .height(1)
         }
     }

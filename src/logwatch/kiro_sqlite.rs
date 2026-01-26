@@ -40,6 +40,8 @@ impl Default for KiroSqliteConfig {
 /// Kiro CLI status from SQLite
 #[derive(Debug, Clone)]
 pub struct KiroStatus {
+    /// Conversation ID (UUID) - unique session identifier
+    pub conversation_id: String,
     /// Main status state
     pub state: StatusState,
     /// Detailed status
@@ -61,6 +63,7 @@ impl KiroStatus {
             .flatten();
 
         SessionStatus {
+            session_id: Some(self.conversation_id.clone()),
             project_path: Some(project_path.to_string()),
             tool: Some("kiro".to_string()),
             status: self.state,
@@ -69,6 +72,11 @@ impl KiroStatus {
             last_activity,
             ..Default::default()
         }
+    }
+
+    /// Generate external session ID for this Kiro session
+    pub fn external_id(&self, project_path: &str) -> String {
+        format!("kiro:{}:{}", project_path, self.conversation_id)
     }
 }
 
@@ -160,14 +168,14 @@ impl KiroSqliteFetcher {
         Ok(conn)
     }
 
-    /// Check if a Kiro CLI process is running for the given workspace
-    fn is_kiro_running(&self, workspace_path: &str) -> bool {
-        // Find kiro processes, check they're running (not stopped), and get their cwd
-        // Process states: R=running, S=sleeping (normal), T=stopped/suspended
+    /// Get running Kiro workspaces with process count
+    pub fn get_running_kiro_workspaces(&self) -> std::collections::HashMap<String, usize> {
+        let mut running: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        // Find kiro-cli processes and get their cwd
         let script = r#"
-            for pid in $(pgrep -f 'kiro-cli-chat|kiro-cli$' 2>/dev/null); do
+            for pid in $(pgrep -x 'kiro-cli' 2>/dev/null); do
                 state=$(ps -p $pid -o state= 2>/dev/null | tr -d ' ')
-                # Only check processes that are running or sleeping (not T=stopped)
                 if [ "$state" != "T" ] && [ -n "$state" ]; then
                     lsof -p $pid 2>/dev/null | grep cwd | awk '{print $NF}'
                 fi
@@ -184,17 +192,30 @@ impl KiroSqliteFetcher {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 for line in stdout.lines() {
                     let cwd = line.trim();
-                    if cwd == workspace_path {
-                        return true;
+                    if !cwd.is_empty() {
+                        *running.entry(cwd.to_string()).or_insert(0) += 1;
                     }
                 }
-                false
             }
-            Err(_) => false,
+            Err(_) => {}
         }
+
+        running
     }
 
-    /// Get status for a specific workspace path
+    /// Check if a Kiro CLI process is running for the given workspace
+    fn is_kiro_running(&self, workspace_path: &str) -> bool {
+        let running = self.get_running_kiro_workspaces();
+        running.contains_key(workspace_path)
+    }
+
+    /// Get process count for a specific workspace
+    pub fn get_kiro_process_count(&self, workspace_path: &str) -> usize {
+        let running = self.get_running_kiro_workspaces();
+        running.get(workspace_path).copied().unwrap_or(0)
+    }
+
+    /// Get status for a specific workspace path (returns first active session)
     pub fn get_status(&self, workspace_path: &str) -> Result<Option<KiroStatus>> {
         if !self.is_available() {
             debug!("Kiro database not available at {:?}", self.config.db_path);
@@ -204,20 +225,32 @@ impl KiroSqliteFetcher {
         // First check if Kiro is actually running for this workspace
         if !self.is_kiro_running(workspace_path) {
             debug!("No Kiro process running for: {}", workspace_path);
-            // Return "stopped" status (green) instead of None
-            return Ok(Some(KiroStatus {
-                state: StatusState::Completed,
-                state_detail: StatusDetail::SessionEnded,
-                summary: Some("Stopped".to_string()),
-                updated_at: SystemTime::now(),
-            }));
+            return Ok(None);
         }
 
         let conn = self.open_connection()?;
         self.get_status_with_conn(&conn, workspace_path)
     }
 
-    /// Get statuses for multiple workspaces
+    /// Get all active sessions for a specific workspace path
+    pub fn get_all_statuses(&self, workspace_path: &str) -> Result<Vec<KiroStatus>> {
+        if !self.is_available() {
+            debug!("Kiro database not available at {:?}", self.config.db_path);
+            return Ok(Vec::new());
+        }
+
+        // Get process count for this workspace
+        let process_count = self.get_kiro_process_count(workspace_path);
+        if process_count == 0 {
+            debug!("No Kiro process running for: {}", workspace_path);
+            return Ok(Vec::new());
+        }
+
+        let conn = self.open_connection()?;
+        self.get_all_statuses_with_conn(&conn, workspace_path, process_count)
+    }
+
+    /// Get statuses for multiple workspaces (returns all active sessions)
     pub fn get_statuses(&self, workspaces: &[String]) -> Vec<(String, KiroStatus)> {
         if !self.is_available() {
             return Vec::new();
@@ -231,18 +264,26 @@ impl KiroSqliteFetcher {
             }
         };
 
+        // Get all running Kiro workspaces with process counts
+        let running = self.get_running_kiro_workspaces();
+
         let mut results = Vec::new();
 
         for workspace in workspaces {
-            match self.get_status_with_conn(&conn, workspace) {
-                Ok(Some(status)) => {
-                    results.push((workspace.clone(), status));
-                }
-                Ok(None) => {
-                    // No status for this workspace
+            // Get process count for this workspace
+            let process_count = running.get(workspace).copied().unwrap_or(0);
+            if process_count == 0 {
+                continue;
+            }
+
+            match self.get_all_statuses_with_conn(&conn, workspace, process_count) {
+                Ok(statuses) => {
+                    for status in statuses {
+                        results.push((workspace.clone(), status));
+                    }
                 }
                 Err(e) => {
-                    debug!("Failed to get status for {}: {}", workspace, e);
+                    debug!("Failed to get statuses for {}: {}", workspace, e);
                 }
             }
         }
@@ -250,37 +291,58 @@ impl KiroSqliteFetcher {
         results
     }
 
-    /// Get status using an existing connection
+    /// Get status using an existing connection (single session - for backward compatibility)
     fn get_status_with_conn(&self, conn: &Connection, workspace_path: &str) -> Result<Option<KiroStatus>> {
-        // Query the conversations_v2 table
-        // updated_at is INTEGER (Unix timestamp in milliseconds)
+        let statuses = self.get_all_statuses_with_conn(conn, workspace_path, 1)?;
+        Ok(statuses.into_iter().next())
+    }
+
+    /// Get sessions for a workspace that have been updated recently
+    fn get_all_statuses_with_conn(&self, conn: &Connection, workspace_path: &str, process_count: usize) -> Result<Vec<KiroStatus>> {
+        // Query conversations updated in the last 10 minutes (active sessions)
+        let ten_minutes_ago_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64 - 600_000)  // 10 minutes = 600,000 ms
+            .unwrap_or(0);
+
         let mut stmt = conn.prepare_cached(
-            "SELECT value, updated_at FROM conversations_v2 WHERE key = ? ORDER BY updated_at DESC LIMIT 1"
+            "SELECT conversation_id, value, updated_at FROM conversations_v2 WHERE key = ? AND updated_at > ? ORDER BY updated_at DESC"
         )?;
 
-        let result: Option<(String, i64)> = stmt
-            .query_row([workspace_path], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .ok();
+        let mut results = Vec::new();
+        let rows = stmt.query_map(rusqlite::params![workspace_path, ten_minutes_ago_ms], |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // conversation_id
+                row.get::<_, String>(1)?,  // value
+                row.get::<_, i64>(2)?,     // updated_at
+            ))
+        })?;
 
-        match result {
-            Some((value, updated_at_ms)) => {
-                let status = self.parse_conversation_value(&value)?;
-                let updated_at = UNIX_EPOCH + Duration::from_millis(updated_at_ms as u64);
+        for row in rows {
+            let (conversation_id, value, updated_at_ms) = row?;
 
-                Ok(Some(KiroStatus {
-                    state: status.0,
-                    state_detail: status.1,
-                    summary: status.2,
-                    updated_at,
-                }))
-            }
-            None => {
-                debug!("No conversation found for workspace: {}", workspace_path);
-                Ok(None)
+            match self.parse_conversation_value(&value) {
+                Ok((state, state_detail, summary)) => {
+                    let updated_at = UNIX_EPOCH + Duration::from_millis(updated_at_ms as u64);
+                    results.push(KiroStatus {
+                        conversation_id,
+                        state,
+                        state_detail,
+                        summary,
+                        updated_at,
+                    });
+                }
+                Err(e) => {
+                    debug!("Failed to parse conversation {}: {}", conversation_id, e);
+                }
             }
         }
+
+        if results.is_empty() {
+            debug!("No conversations found for workspace: {}", workspace_path);
+        }
+
+        Ok(results)
     }
 
     /// Parse conversation value JSON and determine status
@@ -460,6 +522,7 @@ mod tests {
     #[test]
     fn test_kiro_status_to_session_status() {
         let kiro_status = KiroStatus {
+            conversation_id: "test-conv-123".to_string(),
             state: StatusState::Working,
             state_detail: StatusDetail::Thinking,
             summary: Some("Test".to_string()),
@@ -470,6 +533,23 @@ mod tests {
         assert_eq!(session_status.status, StatusState::Working);
         assert_eq!(session_status.tool, Some("kiro".to_string()));
         assert_eq!(session_status.project_path, Some("/path/to/project".to_string()));
+        assert_eq!(session_status.session_id, Some("test-conv-123".to_string()));
+    }
+
+    #[test]
+    fn test_kiro_status_external_id() {
+        let kiro_status = KiroStatus {
+            conversation_id: "abc-123".to_string(),
+            state: StatusState::Working,
+            state_detail: StatusDetail::Thinking,
+            summary: None,
+            updated_at: SystemTime::now(),
+        };
+
+        assert_eq!(
+            kiro_status.external_id("/path/to/project"),
+            "kiro:/path/to/project:abc-123"
+        );
     }
 
     #[test]

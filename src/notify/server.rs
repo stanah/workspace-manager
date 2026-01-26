@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use super::protocol::NotifyMessage;
 use crate::app::AppEvent;
-use crate::workspace::WorkspaceStatus;
+use crate::workspace::{AiTool, SessionStatus, claude_external_id};
 
 /// Run the notification listener
 ///
@@ -92,21 +92,36 @@ fn message_to_event(message: NotifyMessage) -> AppEvent {
         NotifyMessage::Register {
             session_id,
             project_path,
-            tool: _,
-        } => AppEvent::WorkspaceRegister {
-            session_id,
-            project_path,
-            pane_id: None,
-        },
+            tool,
+        } => {
+            // Convert to new session-based event
+            let ai_tool = tool
+                .map(|t| AiTool::from_str(&t))
+                .unwrap_or(AiTool::Claude);
+            let external_id = claude_external_id(&session_id);
+
+            AppEvent::SessionRegister {
+                external_id,
+                project_path,
+                tool: ai_tool,
+                pane_id: None,
+            }
+        }
         NotifyMessage::Status {
             session_id,
             status,
             message,
-        } => AppEvent::WorkspaceUpdate {
-            session_id,
-            status: WorkspaceStatus::from_str(&status),
-            message,
-        },
-        NotifyMessage::Unregister { session_id } => AppEvent::WorkspaceUnregister { session_id },
+        } => {
+            let external_id = claude_external_id(&session_id);
+            AppEvent::SessionUpdate {
+                external_id,
+                status: SessionStatus::from_str(&status),
+                message,
+            }
+        }
+        NotifyMessage::Unregister { session_id } => {
+            let external_id = claude_external_id(&session_id);
+            AppEvent::SessionUnregister { external_id }
+        }
     }
 }

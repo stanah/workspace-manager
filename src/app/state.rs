@@ -1,7 +1,10 @@
-use crate::workspace::{Workspace, WorkspaceStatus, WorktreeManager, scan_for_repositories, get_default_search_paths};
+use crate::workspace::{
+    AiTool, Session, SessionStatus, Workspace, WorktreeManager, get_default_search_paths,
+    scan_for_repositories,
+};
 use std::collections::{HashMap, HashSet};
 
-use crate::ui::{InputDialog, SelectionDialog, SelectionDialogKind, SelectionContext};
+use crate::ui::{InputDialog, SelectionContext, SelectionDialog, SelectionDialogKind};
 
 /// アプリケーションの表示モード
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -63,6 +66,11 @@ pub enum TreeItem {
         workspace_index: usize,
         is_last: bool,
     },
+    /// セッション（AI CLI）
+    Session {
+        session_index: usize,
+        is_last: bool,
+    },
     /// ブランチ（worktree未作成）
     Branch {
         name: String,
@@ -76,12 +84,16 @@ pub enum TreeItem {
 pub struct AppState {
     /// 検出されたワークスペース一覧
     pub workspaces: Vec<Workspace>,
+    /// アクティブなセッション一覧
+    pub sessions: Vec<Session>,
     /// ツリー表示用のフラット化されたリスト
     pub tree_items: Vec<TreeItem>,
     /// 折りたたまれたリポジトリのパス
     collapsed_repos: HashSet<String>,
-    /// session_id -> workspace index のマッピング
+    /// external_id -> session index のマッピング
     session_map: HashMap<String, usize>,
+    /// workspace_index -> session indices のマッピング
+    sessions_by_workspace: HashMap<usize, Vec<usize>>,
     /// 現在選択中のインデックス（tree_items内）
     pub selected_index: usize,
     /// 表示モード
@@ -107,9 +119,11 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             workspaces: Vec::new(),
+            sessions: Vec::new(),
             tree_items: Vec::new(),
             collapsed_repos: HashSet::new(),
             session_map: HashMap::new(),
+            sessions_by_workspace: HashMap::new(),
             selected_index: 0,
             view_mode: ViewMode::List,
             list_display_mode: ListDisplayMode::default(),
@@ -138,7 +152,6 @@ impl AppState {
         workspaces.sort_by(|a, b| a.project_path.cmp(&b.project_path));
 
         self.workspaces = workspaces;
-        self.rebuild_session_map();
         self.rebuild_tree();
 
         self.status_message = Some(format!("Found {} workspaces", self.workspaces.len()));
@@ -162,7 +175,9 @@ impl AppState {
             let repo_key = self.get_repo_key(ws);
             repo_groups.entry(repo_key.clone()).or_default().push(idx);
             // 最初のワークスペースのパスを保存
-            repo_paths.entry(repo_key).or_insert_with(|| ws.project_path.clone());
+            repo_paths
+                .entry(repo_key)
+                .or_insert_with(|| ws.project_path.clone());
         }
 
         // ソートしてツリーアイテムを構築
@@ -189,53 +204,65 @@ impl AppState {
                 .collect();
 
             // ブランチ情報を取得
-            let (local_branches, remote_branches) = if self.list_display_mode != ListDisplayMode::Worktrees {
-                if let Some(manager) = worktree_manager {
-                    // フィルターを適用するクロージャ
-                    let filter_ref = self.branch_filter.as_ref();
-                    let matches_filter = |b: &String| -> bool {
-                        match filter_ref {
-                            Some(filter) if !filter.is_empty() => {
-                                b.to_lowercase().contains(&filter.to_lowercase())
+            let (local_branches, remote_branches) =
+                if self.list_display_mode != ListDisplayMode::Worktrees {
+                    if let Some(manager) = worktree_manager {
+                        // フィルターを適用するクロージャ
+                        let filter_ref = self.branch_filter.as_ref();
+                        let matches_filter = |b: &String| -> bool {
+                            match filter_ref {
+                                Some(filter) if !filter.is_empty() => {
+                                    b.to_lowercase().contains(&filter.to_lowercase())
+                                }
+                                _ => true,
                             }
-                            _ => true,
-                        }
-                    };
+                        };
 
-                    let local = manager
-                        .list_local_branches(std::path::Path::new(&repo_path))
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|b| !existing_branches.contains(b) && matches_filter(b))
-                        .collect::<Vec<_>>();
-
-                    let remote = if self.list_display_mode == ListDisplayMode::WithAllBranches {
-                        let max_branches = manager.config().max_remote_branches;
-                        let branches: Vec<_> = manager
-                            .list_remote_branches(std::path::Path::new(&repo_path))
+                        let local = manager
+                            .list_local_branches(std::path::Path::new(&repo_path))
                             .unwrap_or_default()
                             .into_iter()
-                            .filter(|b| !existing_branches.contains(b) && !local.contains(b) && matches_filter(b))
-                            .collect();
-                        // 上限を適用（0は無制限）
-                        if max_branches > 0 && branches.len() > max_branches {
-                            branches.into_iter().take(max_branches).collect()
-                        } else {
-                            branches
-                        }
-                    } else {
-                        Vec::new()
-                    };
+                            .filter(|b| !existing_branches.contains(b) && matches_filter(b))
+                            .collect::<Vec<_>>();
 
-                    (local, remote)
+                        let remote = if self.list_display_mode == ListDisplayMode::WithAllBranches {
+                            let max_branches = manager.config().max_remote_branches;
+                            let branches: Vec<_> = manager
+                                .list_remote_branches(std::path::Path::new(&repo_path))
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|b| {
+                                    !existing_branches.contains(b)
+                                        && !local.contains(b)
+                                        && matches_filter(b)
+                                })
+                                .collect();
+                            // 上限を適用（0は無制限）
+                            if max_branches > 0 && branches.len() > max_branches {
+                                branches.into_iter().take(max_branches).collect()
+                            } else {
+                                branches
+                            }
+                        } else {
+                            Vec::new()
+                        };
+
+                        (local, remote)
+                    } else {
+                        (Vec::new(), Vec::new())
+                    }
                 } else {
                     (Vec::new(), Vec::new())
-                }
-            } else {
-                (Vec::new(), Vec::new())
-            };
+                };
 
-            let total_items = indices.len() + local_branches.len() + remote_branches.len();
+            // ワークスペースごとのセッション数をカウント
+            let session_count: usize = indices
+                .iter()
+                .map(|&idx| self.sessions_for_workspace(idx).len())
+                .sum();
+
+            let total_items =
+                indices.len() + session_count + local_branches.len() + remote_branches.len();
 
             // グループヘッダーを追加
             self.tree_items.push(TreeItem::RepoGroup {
@@ -245,18 +272,35 @@ impl AppState {
                 worktree_count: indices.len(),
             });
 
-            // 展開されている場合はworktreeとブランチを追加
+            // 展開されている場合はworktreeとセッション、ブランチを追加
             if is_expanded {
                 let mut item_count = 0;
 
-                // Worktreeを追加
-                for &ws_idx in indices.iter() {
+                // Worktreeとそのセッションを追加
+                for (ws_idx_pos, &ws_idx) in indices.iter().enumerate() {
+                    let workspace_sessions = self.sessions_for_workspace(ws_idx);
+                    let is_last_worktree = ws_idx_pos == indices.len() - 1
+                        && local_branches.is_empty()
+                        && remote_branches.is_empty()
+                        && workspace_sessions.is_empty();
+
                     item_count += 1;
-                    let is_last = item_count == total_items;
                     self.tree_items.push(TreeItem::Worktree {
                         workspace_index: ws_idx,
-                        is_last,
+                        is_last: is_last_worktree && item_count == total_items,
                     });
+
+                    // このワークスペースのセッションを追加
+                    for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
+                        item_count += 1;
+                        let is_last_session = sess_idx_pos == workspace_sessions.len() - 1
+                            && is_last_worktree
+                            && item_count == total_items;
+                        self.tree_items.push(TreeItem::Session {
+                            session_index: sess_idx,
+                            is_last: is_last_session,
+                        });
+                    }
                 }
 
                 // ローカルブランチを追加
@@ -324,15 +368,143 @@ impl AppState {
         ws.repo_name.clone()
     }
 
-    /// session_mapを再構築
-    fn rebuild_session_map(&mut self) {
-        self.session_map.clear();
-        for (idx, ws) in self.workspaces.iter().enumerate() {
-            if let Some(ref session_id) = ws.session_id {
-                self.session_map.insert(session_id.clone(), idx);
+    // ===== Session management =====
+
+    /// セッションを追加
+    pub fn add_session(&mut self, session: Session) -> usize {
+        let workspace_index = session.workspace_index;
+        let external_id = session.external_id.clone();
+        let session_index = self.sessions.len();
+
+        self.sessions.push(session);
+        self.session_map.insert(external_id, session_index);
+        self.sessions_by_workspace
+            .entry(workspace_index)
+            .or_default()
+            .push(session_index);
+
+        session_index
+    }
+
+    /// セッションを外部IDで検索
+    pub fn get_session_by_external_id(&self, external_id: &str) -> Option<&Session> {
+        self.session_map
+            .get(external_id)
+            .and_then(|&idx| self.sessions.get(idx))
+    }
+
+    /// セッションを外部IDで検索（mutable）
+    pub fn get_session_by_external_id_mut(&mut self, external_id: &str) -> Option<&mut Session> {
+        self.session_map
+            .get(external_id)
+            .and_then(|&idx| self.sessions.get_mut(idx))
+    }
+
+    /// ワークスペースのセッション一覧を取得
+    pub fn sessions_for_workspace(&self, workspace_index: usize) -> Vec<usize> {
+        self.sessions_by_workspace
+            .get(&workspace_index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// セッションを削除（実際には切断状態にする）
+    pub fn remove_session(&mut self, external_id: &str) {
+        if let Some(&session_index) = self.session_map.get(external_id) {
+            if let Some(session) = self.sessions.get_mut(session_index) {
+                session.disconnect();
             }
         }
     }
+
+    /// セッションステータスを更新
+    pub fn update_session_status(
+        &mut self,
+        external_id: &str,
+        status: SessionStatus,
+        message: Option<String>,
+    ) {
+        if let Some(&session_index) = self.session_map.get(external_id) {
+            if let Some(session) = self.sessions.get_mut(session_index) {
+                session.update_status(status, message);
+            }
+        }
+    }
+
+    /// プロジェクトパスからワークスペースインデックスを検索
+    pub fn find_workspace_by_path(&self, project_path: &str) -> Option<usize> {
+        // 正規化されたパスで比較
+        let normalized = normalize_path(project_path);
+        self.workspaces
+            .iter()
+            .position(|w| normalize_path(&w.project_path) == normalized)
+    }
+
+    /// セッションを登録（新規または既存を更新）
+    pub fn register_session(
+        &mut self,
+        external_id: String,
+        project_path: &str,
+        tool: AiTool,
+        pane_id: Option<u32>,
+    ) -> Option<usize> {
+        // ワークスペースを検索
+        let workspace_index = self.find_workspace_by_path(project_path)?;
+
+        // 既存セッションがあれば更新
+        if let Some(&session_index) = self.session_map.get(&external_id) {
+            if let Some(session) = self.sessions.get_mut(session_index) {
+                session.status = SessionStatus::Idle;
+                session.pane_id = pane_id;
+                session.updated_at = std::time::SystemTime::now();
+            }
+            return Some(session_index);
+        }
+
+        // 新規セッションを作成
+        let mut session = Session::new(external_id, workspace_index, tool);
+        session.pane_id = pane_id;
+        let session_index = self.add_session(session);
+
+        Some(session_index)
+    }
+
+    /// ワークスペースの集約ステータスを取得
+    /// 優先度: Working > NeedsInput > Idle > Disconnected
+    pub fn workspace_aggregate_status(&self, workspace_index: usize) -> SessionStatus {
+        let session_indices = self.sessions_for_workspace(workspace_index);
+
+        if session_indices.is_empty() {
+            return SessionStatus::Disconnected;
+        }
+
+        let mut has_working = false;
+        let mut has_needs_input = false;
+        let mut has_idle = false;
+
+        for &idx in &session_indices {
+            if let Some(session) = self.sessions.get(idx) {
+                match session.status {
+                    SessionStatus::Working => has_working = true,
+                    SessionStatus::NeedsInput => has_needs_input = true,
+                    SessionStatus::Idle | SessionStatus::Success => has_idle = true,
+                    _ => {}
+                }
+            }
+        }
+
+        if has_working {
+            SessionStatus::Working
+        } else if has_needs_input {
+            SessionStatus::NeedsInput
+        } else if has_idle {
+            SessionStatus::Idle
+        } else {
+            SessionStatus::Disconnected
+        }
+    }
+
+    // ===== Navigation =====
 
     /// 選択を上に移動
     pub fn move_up(&mut self) {
@@ -350,7 +522,9 @@ impl AppState {
 
     /// 選択中のアイテムを展開/折りたたみ
     pub fn toggle_expand(&mut self) {
-        if let Some(TreeItem::RepoGroup { path, expanded, .. }) = self.tree_items.get(self.selected_index).cloned() {
+        if let Some(TreeItem::RepoGroup { path, expanded, .. }) =
+            self.tree_items.get(self.selected_index).cloned()
+        {
             if expanded {
                 self.collapsed_repos.insert(path);
             } else {
@@ -366,6 +540,11 @@ impl AppState {
             Some(TreeItem::Worktree { workspace_index, .. }) => {
                 self.workspaces.get(*workspace_index)
             }
+            Some(TreeItem::Session { session_index, .. }) => {
+                self.sessions.get(*session_index).and_then(|s| {
+                    self.workspaces.get(s.workspace_index)
+                })
+            }
             Some(TreeItem::RepoGroup { .. }) | Some(TreeItem::Branch { .. }) => {
                 // グループまたはブランチが選択されている場合はNone
                 None
@@ -374,12 +553,23 @@ impl AppState {
         }
     }
 
+    /// 現在選択中のセッションを取得
+    pub fn selected_session(&self) -> Option<&Session> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::Session { session_index, .. }) => self.sessions.get(*session_index),
+            _ => None,
+        }
+    }
+
     /// 現在選択中のブランチ情報を取得
     pub fn selected_branch_info(&self) -> Option<(&str, bool, &str)> {
         match self.tree_items.get(self.selected_index) {
-            Some(TreeItem::Branch { name, is_local, repo_path, .. }) => {
-                Some((name.as_str(), *is_local, repo_path.as_str()))
-            }
+            Some(TreeItem::Branch {
+                name,
+                is_local,
+                repo_path,
+                ..
+            }) => Some((name.as_str(), *is_local, repo_path.as_str())),
             _ => None,
         }
     }
@@ -395,65 +585,6 @@ impl AppState {
         self.tree_items.get(self.selected_index)
     }
 
-    /// ワークスペースを登録（MCPから）- Phase 2用
-    #[allow(dead_code)]
-    pub fn register_workspace(
-        &mut self,
-        session_id: String,
-        project_path: String,
-        pane_id: Option<u32>,
-    ) {
-        // 既存のワークスペースを探す
-        if let Some(idx) = self.workspaces.iter().position(|ws| ws.project_path == project_path) {
-            self.workspaces[idx].session_id = Some(session_id.clone());
-            self.workspaces[idx].pane_id = pane_id;
-            self.workspaces[idx].status = WorkspaceStatus::Idle;
-            self.session_map.insert(session_id, idx);
-        } else {
-            // 新規ワークスペースを追加
-            let mut ws = Workspace::new(
-                project_path,
-                "unknown".to_string(),
-                "unknown".to_string(),
-            );
-            ws.session_id = Some(session_id.clone());
-            ws.pane_id = pane_id;
-            ws.status = WorkspaceStatus::Idle;
-
-            let idx = self.workspaces.len();
-            self.workspaces.push(ws);
-            self.session_map.insert(session_id, idx);
-        }
-        self.rebuild_tree();
-    }
-
-    /// ワークスペース状態を更新（MCPから）- Phase 2用
-    #[allow(dead_code)]
-    pub fn update_workspace_status(
-        &mut self,
-        session_id: &str,
-        status: WorkspaceStatus,
-        message: Option<String>,
-    ) {
-        if let Some(&idx) = self.session_map.get(session_id) {
-            if let Some(ws) = self.workspaces.get_mut(idx) {
-                ws.update_status(status, message);
-            }
-        }
-    }
-
-    /// ワークスペースを登録解除（MCPから）- Phase 2用
-    #[allow(dead_code)]
-    pub fn unregister_workspace(&mut self, session_id: &str) {
-        if let Some(&idx) = self.session_map.get(session_id) {
-            if let Some(ws) = self.workspaces.get_mut(idx) {
-                ws.session_id = None;
-                ws.status = WorkspaceStatus::Disconnected;
-            }
-            self.session_map.remove(session_id);
-        }
-    }
-
     /// ヘルプ表示を切り替え
     pub fn toggle_help(&mut self) {
         self.view_mode = match self.view_mode {
@@ -462,19 +593,16 @@ impl AppState {
         };
     }
 
-    /// アクティブなワークスペース数を取得
+    /// アクティブなセッション数を取得
     pub fn active_count(&self) -> usize {
-        self.workspaces
-            .iter()
-            .filter(|ws| ws.session_id.is_some())
-            .count()
+        self.sessions.iter().filter(|s| s.is_active()).count()
     }
 
-    /// 作業中のワークスペース数を取得
+    /// 作業中のセッション数を取得
     pub fn working_count(&self) -> usize {
-        self.workspaces
+        self.sessions
             .iter()
-            .filter(|ws| ws.status == WorkspaceStatus::Working)
+            .filter(|s| s.status == SessionStatus::Working)
             .count()
     }
 
@@ -538,7 +666,9 @@ impl AppState {
 
     /// 選択ダイアログで選択されたアイテムを取得
     pub fn get_selected_dialog_item(&self) -> Option<&str> {
-        self.selection_dialog.as_ref().and_then(|d| d.selected_item())
+        self.selection_dialog
+            .as_ref()
+            .and_then(|d| d.selected_item())
     }
 
     /// 選択ダイアログの種類を取得
@@ -548,7 +678,9 @@ impl AppState {
 
     /// 選択ダイアログのコンテキストを取得
     pub fn selection_dialog_context(&self) -> Option<&SelectionContext> {
-        self.selection_dialog.as_ref().and_then(|d| d.context.as_ref())
+        self.selection_dialog
+            .as_ref()
+            .and_then(|d| d.context.as_ref())
     }
 
     /// Zellijで開いているタブ名を更新
@@ -577,13 +709,20 @@ impl AppState {
         // 現在選択中のアイテムがWorktreeの場合はそのワークスペースのパスを返す
         // RepoGroupの場合は最初のworktreeのパスを返す
         // Branchの場合はrepo_pathを返す
+        // Sessionの場合は親ワークスペースのパスを返す
         match self.tree_items.get(self.selected_index) {
-            Some(TreeItem::Worktree { workspace_index, .. }) => {
-                self.workspaces.get(*workspace_index).map(|ws| ws.project_path.clone())
+            Some(TreeItem::Worktree { workspace_index, .. }) => self
+                .workspaces
+                .get(*workspace_index)
+                .map(|ws| ws.project_path.clone()),
+            Some(TreeItem::Session { session_index, .. }) => {
+                self.sessions.get(*session_index).and_then(|s| {
+                    self.workspaces
+                        .get(s.workspace_index)
+                        .map(|ws| ws.project_path.clone())
+                })
             }
-            Some(TreeItem::Branch { repo_path, .. }) => {
-                Some(repo_path.clone())
-            }
+            Some(TreeItem::Branch { repo_path, .. }) => Some(repo_path.clone()),
             Some(TreeItem::RepoGroup { path, .. }) => {
                 // このグループの最初のworktreeを探す
                 for item in &self.tree_items {
@@ -606,4 +745,14 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Normalize a path by expanding ~ to home directory
+fn normalize_path(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}{}", home.to_string_lossy(), &path[1..]);
+        }
+    }
+    path.to_string()
 }

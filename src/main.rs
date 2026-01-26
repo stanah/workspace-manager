@@ -13,12 +13,12 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
-use workspace_manager::logwatch::{KiroSqliteConfig, KiroSqliteFetcher};
+use workspace_manager::logwatch::{ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::{InputDialog, InputDialogKind};
 use workspace_manager::ui::selection_dialog::{SelectionContext, SelectionDialogKind};
-use workspace_manager::workspace::{WorkspaceStatus, WorktreeManager};
+use workspace_manager::workspace::{AiTool, SessionStatus, WorktreeManager};
 use workspace_manager::zellij::{TabActionResult, ZellijActions};
 
 /// Workspace Manager - TUI for managing Claude Code workspaces
@@ -95,16 +95,6 @@ fn main() -> Result<()> {
         Some(Commands::Notify { action }) => handle_notify(action),
         Some(Commands::Tui) | None => run_tui(),
     }
-}
-
-/// Normalize a path by expanding ~ to home directory
-fn normalize_path(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return format!("{}{}", home.to_string_lossy(), &path[1..]);
-        }
-    }
-    path.to_string()
 }
 
 fn handle_notify(action: NotifyAction) -> Result<()> {
@@ -245,29 +235,16 @@ fn run_tui() -> Result<()> {
 }
 
 /// Simple Claude Code status service (hooks-based, no AI analysis)
-///
-/// Note: Claude Code hooks already provide working/idle status via NotifyMessage,
-/// so this service is primarily for logging/debugging purposes.
-/// The actual status updates come through the notify channel (AppEvent::WorkspaceUpdate).
-struct ClaudeStatusService;
-
-impl ClaudeStatusService {
-    fn new(_tx: tokio::sync::mpsc::Sender<AppEvent>) -> Self {
-        Self
-    }
-
-    /// Handle Claude Code status update trigger from hooks
-    async fn handle_trigger(&self, project_path: &str) {
-        tracing::debug!("Claude Code status trigger for: {}", project_path);
-        // No additional processing needed - hooks provide status directly via NotifyMessage
-    }
-}
-
-/// Channel for triggering log analysis
+/// Channel for triggering log analysis (used for shutdown signaling)
 type LogWatchTrigger = tokio::sync::mpsc::Sender<String>;
 
+/// Normalize path for comparison (expand ~ and resolve)
+fn normalize_path_for_comparison(path: &str) -> String {
+    path.replace("~", &std::env::var("HOME").unwrap_or_default())
+}
+
 /// Run log watcher service with new architecture:
-/// - Claude Code: hooks-based (event-driven, no AI analysis)
+/// - Claude Code: sessions-index.json polling
 /// - Kiro CLI: SQLite polling (reads status from database)
 async fn run_logwatch(
     config: workspace_manager::app::LogWatchConfig,
@@ -276,14 +253,113 @@ async fn run_logwatch(
     workspace_rx: tokio::sync::watch::Receiver<Vec<String>>,
 ) {
     tracing::info!(
-        "Log watch service started (Claude hooks: {}, Kiro polling: {})",
-        config.claude_hooks_enabled,
+        "Log watch service started (Claude polling: {}, Kiro polling: {})",
+        config.claude_hooks_enabled,  // Reusing this config flag for Claude polling
         config.kiro_polling_enabled
     );
 
-    // Claude Code: hooks-based service (no polling, no AI)
-    let claude_service = if config.claude_hooks_enabled {
-        Some(ClaudeStatusService::new(tx.clone()))
+    // Claude Code: sessions-index.json polling task
+    let claude_polling_handle = if config.claude_hooks_enabled {
+        let claude_fetcher = ClaudeSessionsFetcher::new();
+        let poll_interval = Duration::from_secs(config.kiro_polling_interval_secs); // Use same interval
+        let poll_tx = tx.clone();
+        let mut poll_workspace_rx = workspace_rx.clone();
+
+        Some(tokio::spawn(async move {
+            if !claude_fetcher.is_available() {
+                tracing::info!("Claude projects directory not found, polling disabled");
+                return;
+            }
+
+            tracing::info!(
+                "Claude sessions-index polling started (interval: {}s, dir: {:?})",
+                poll_interval.as_secs(),
+                claude_fetcher.claude_dir()
+            );
+
+            // Track previously active sessions to detect disconnections
+            let mut prev_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            loop {
+                tokio::time::sleep(poll_interval).await;
+
+                // Get current workspace list
+                let workspaces = poll_workspace_rx.borrow_and_update().clone();
+
+                if workspaces.is_empty() {
+                    continue;
+                }
+
+                // Get running Claude processes with their session IDs
+                let running_processes = claude_fetcher.get_running_processes();
+
+                // Fetch sessions from Claude sessions-index.json
+                let sessions_by_path = claude_fetcher.get_sessions(&workspaces);
+                let mut current_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                for (path, sessions) in &sessions_by_path {
+                    let normalized_path = normalize_path_for_comparison(path);
+
+                    // Get running session IDs for this workspace
+                    let running_session_ids: Vec<&str> = running_processes.iter()
+                        .filter(|p| p.cwd == normalized_path)
+                        .filter_map(|p| p.session_id.as_deref())
+                        .collect();
+
+                    // Also get process count (some may not have --resume)
+                    let total_process_count = running_processes.iter()
+                        .filter(|p| p.cwd == normalized_path)
+                        .count();
+
+                    if total_process_count == 0 {
+                        continue;
+                    }
+
+                    // Match sessions: prefer exact session ID match, fallback to newest
+                    let mut matched_count = 0;
+                    for session in sessions {
+                        // Check if this session's ID matches a running process
+                        let is_running = running_session_ids.iter()
+                            .any(|&sid| session.session_id == sid);
+
+                        // Or if we haven't matched enough sessions yet (fallback for new sessions without --resume)
+                        let should_include = is_running ||
+                            (matched_count < total_process_count && running_session_ids.len() < total_process_count);
+
+                        if should_include && matched_count < total_process_count {
+                            matched_count += 1;
+                            current_active_sessions.insert(session.external_id.clone());
+                            let session_status = session.to_session_status();
+                            let event = AppEvent::SessionStatusAnalyzed {
+                                external_id: session.external_id.clone(),
+                                project_path: path.clone(),
+                                status: session_status,
+                            };
+                            if poll_tx.send(event).await.is_err() {
+                                tracing::warn!("Claude poll receiver dropped");
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Send Disconnected for sessions that were active but are no longer
+                for external_id in prev_active_sessions.difference(&current_active_sessions) {
+                    tracing::debug!("Claude session disconnected: {}", external_id);
+                    let event = AppEvent::SessionUpdate {
+                        external_id: external_id.clone(),
+                        status: SessionStatus::Disconnected,
+                        message: Some("Process ended".to_string()),
+                    };
+                    if poll_tx.send(event).await.is_err() {
+                        tracing::warn!("Claude poll receiver dropped");
+                        return;
+                    }
+                }
+
+                prev_active_sessions = current_active_sessions;
+            }
+        }))
     } else {
         None
     };
@@ -311,6 +387,12 @@ async fn run_logwatch(
                 kiro_fetcher.db_path()
             );
 
+            // Track session timestamps to detect which sessions are actually being updated
+            let mut prev_session_timestamps: std::collections::HashMap<String, std::time::SystemTime> =
+                std::collections::HashMap::new();
+            // Track sessions that have been active (updated at least once)
+            let mut prev_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
             loop {
                 tokio::time::sleep(poll_interval).await;
 
@@ -321,32 +403,83 @@ async fn run_logwatch(
                     continue;
                 }
 
-                // Fetch statuses from Kiro SQLite
+                // Get running Kiro workspaces with process counts
+                let running = kiro_fetcher.get_running_kiro_workspaces();
+
+                // Fetch all recent sessions from Kiro SQLite
+                let mut current_active_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut current_timestamps: std::collections::HashMap<String, std::time::SystemTime> =
+                    std::collections::HashMap::new();
+
                 for (path, status) in kiro_fetcher.get_statuses(&workspaces) {
-                    let session_status = status.to_session_status(&path);
-                    let event = AppEvent::WorkspaceStatusAnalyzed {
-                        project_path: path,
-                        status: session_status,
+                    let external_id = status.external_id(&path);
+                    let updated_at = status.updated_at;
+
+                    // Check if this session's timestamp has changed (meaning it's active)
+                    let prev_ts = prev_session_timestamps.get(&external_id);
+                    let is_updated = prev_ts.map_or(true, |&ts| updated_at > ts);
+
+                    // Get process count for this workspace
+                    let process_count = running.get(&path).copied().unwrap_or(0);
+
+                    // Count how many sessions we've already marked active for this workspace
+                    let active_for_workspace = current_active_sessions.iter()
+                        .filter(|id| id.starts_with(&format!("kiro:{}:", path)))
+                        .count();
+
+                    // Include if: updated recently OR we haven't reached process count yet
+                    let should_include = process_count > 0 &&
+                        (is_updated || active_for_workspace < process_count);
+
+                    current_timestamps.insert(external_id.clone(), updated_at);
+
+                    if should_include && active_for_workspace < process_count {
+                        current_active_sessions.insert(external_id.clone());
+
+                        let session_status = status.to_session_status(&path);
+                        let event = AppEvent::SessionStatusAnalyzed {
+                            external_id,
+                            project_path: path,
+                            status: session_status,
+                        };
+                        if poll_tx.send(event).await.is_err() {
+                            tracing::warn!("Kiro poll receiver dropped");
+                            return;
+                        }
+                    }
+                }
+
+                // Send Disconnected for sessions that were active but are no longer
+                for external_id in prev_active_sessions.difference(&current_active_sessions) {
+                    tracing::debug!("Kiro session disconnected: {}", external_id);
+                    let event = AppEvent::SessionUpdate {
+                        external_id: external_id.clone(),
+                        status: SessionStatus::Disconnected,
+                        message: Some("Process ended".to_string()),
                     };
                     if poll_tx.send(event).await.is_err() {
                         tracing::warn!("Kiro poll receiver dropped");
                         return;
                     }
                 }
+
+                prev_active_sessions = current_active_sessions;
+                prev_session_timestamps = current_timestamps;
             }
         }))
     } else {
         None
     };
 
-    // Handle Claude Code event-driven triggers
-    while let Some(project_path) = trigger_rx.recv().await {
-        if let Some(ref service) = claude_service {
-            service.handle_trigger(&project_path).await;
-        }
+    // Wait for shutdown signal (trigger_rx closing)
+    while trigger_rx.recv().await.is_some() {
+        // Ignore triggers - we use polling now
     }
 
     // Cleanup
+    if let Some(handle) = claude_polling_handle {
+        handle.abort();
+    }
     if let Some(handle) = kiro_polling_handle {
         handle.abort();
     }
@@ -382,13 +515,13 @@ fn run_app(
             // Trigger log analysis for relevant events
             if let Some(ref trigger) = logwatch_trigger {
                 let path_to_analyze: Option<String> = match &event {
-                    AppEvent::WorkspaceRegister { project_path, .. } => {
+                    AppEvent::SessionRegister { project_path, .. } => {
                         Some(project_path.clone())
                     }
-                    AppEvent::WorkspaceUpdate { session_id, .. } => {
-                        // Find project path from session_id
-                        state.workspaces.iter()
-                            .find(|w| w.session_id.as_ref() == Some(session_id))
+                    AppEvent::SessionUpdate { external_id, .. } => {
+                        // Find project path from external_id
+                        state.get_session_by_external_id(external_id)
+                            .and_then(|s| state.workspaces.get(s.workspace_index))
                             .map(|w| w.project_path.clone())
                     }
                     _ => None,
@@ -732,85 +865,96 @@ fn handle_selection_event(
 /// Handle notify events from the UDS listener
 fn handle_notify_event(state: &mut AppState, event: AppEvent) {
     match event {
-        AppEvent::WorkspaceRegister {
-            session_id,
+        AppEvent::SessionRegister {
+            external_id,
             project_path,
+            tool,
             pane_id,
         } => {
             tracing::info!(
-                "Workspace registered: session={}, path={}",
-                session_id,
-                project_path
+                "Session registered: external_id={}, path={}, tool={:?}",
+                external_id,
+                project_path,
+                tool
             );
-            // Find matching workspace by project_path and update session_id
-            // Compare using normalized paths (expand ~ to home dir)
-            let normalized_path = normalize_path(&project_path);
-            if let Some(ws) = state
-                .workspaces
-                .iter_mut()
-                .find(|w| normalize_path(&w.project_path) == normalized_path)
-            {
-                ws.session_id = Some(session_id.clone());
-                ws.pane_id = pane_id;
-                ws.status = WorkspaceStatus::NeedsInput;  // 登録直後は入力待ち
-                ws.updated_at = std::time::SystemTime::now();
-                tracing::info!("Matched workspace: {} -> session {}", ws.project_path, session_id);
+            // Register the session
+            if let Some(session_index) = state.register_session(
+                external_id.clone(),
+                &project_path,
+                tool,
+                pane_id,
+            ) {
+                tracing::info!(
+                    "Session registered at index {}: {}",
+                    session_index,
+                    external_id
+                );
+                // Rebuild tree to show the new session
+                state.rebuild_tree();
             } else {
-                tracing::warn!("No matching workspace found for path: {}", project_path);
+                tracing::warn!(
+                    "No matching workspace found for path: {}",
+                    project_path
+                );
             }
         }
-        AppEvent::WorkspaceUpdate {
-            session_id,
+        AppEvent::SessionUpdate {
+            external_id,
             status,
             message,
         } => {
             tracing::info!(
-                "Workspace status update: session={}, status={:?}",
-                session_id,
+                "Session status update: external_id={}, status={:?}",
+                external_id,
                 status
             );
-            // Find workspace by session_id and update status
-            if let Some(ws) = state
-                .workspaces
-                .iter_mut()
-                .find(|w| w.session_id.as_ref() == Some(&session_id))
-            {
-                ws.status = status;
-                ws.message = message;
-                ws.updated_at = std::time::SystemTime::now();
-            }
+            state.update_session_status(&external_id, status, message);
         }
-        AppEvent::WorkspaceUnregister { session_id } => {
-            tracing::info!("Workspace unregistered: session={}", session_id);
-            // Find workspace by session_id and mark as disconnected
-            if let Some(ws) = state
-                .workspaces
-                .iter_mut()
-                .find(|w| w.session_id.as_ref() == Some(&session_id))
-            {
-                ws.session_id = None;
-                ws.status = WorkspaceStatus::Disconnected;
-                ws.updated_at = std::time::SystemTime::now();
-            }
+        AppEvent::SessionUnregister { external_id } => {
+            tracing::info!("Session unregistered: external_id={}", external_id);
+            state.remove_session(&external_id);
         }
-        AppEvent::WorkspaceStatusAnalyzed { project_path, status } => {
+        AppEvent::SessionStatusAnalyzed {
+            external_id,
+            project_path,
+            status,
+        } => {
             tracing::debug!(
-                "AI status update: path={}, status={:?}",
+                "AI status update: external_id={}, path={}, status={:?}",
+                external_id,
                 project_path,
                 status.status
             );
-            // Find workspace by project_path and update AI status
-            let normalized_path = normalize_path(&project_path);
-            if let Some(ws) = state
-                .workspaces
-                .iter_mut()
-                .find(|w| normalize_path(&w.project_path) == normalized_path)
-            {
-                ws.update_from_ai_status(&status);
+
+            // Check if session exists, if not register it first (for polling)
+            let is_new_session = state.get_session_by_external_id(&external_id).is_none();
+            if is_new_session {
+                // Determine tool from external_id prefix
+                let tool = if external_id.starts_with("kiro:") {
+                    AiTool::Kiro
+                } else {
+                    AiTool::Claude
+                };
+
+                if let Some(_) = state.register_session(
+                    external_id.clone(),
+                    &project_path,
+                    tool,
+                    None,
+                ) {
+                    tracing::debug!("Auto-registered session from polling: {}", external_id);
+                    // Rebuild tree to show the new session
+                    state.rebuild_tree();
+                }
+            }
+
+            // Update session with AI analysis status
+            if let Some(session) = state.get_session_by_external_id_mut(&external_id) {
+                session.update_from_logwatch_status(&status);
                 tracing::debug!(
-                    "Updated workspace {} with AI status: {:?}",
-                    ws.repo_name,
-                    ws.ai_summary
+                    "Updated session {} with AI status: {:?}",
+                    external_id,
+                    session.summary
                 );
             }
         }
@@ -853,7 +997,16 @@ fn handle_action(
             if let Some(ws) = state.selected_workspace() {
                 // Zellij Internal mode: ペインにフォーカス
                 if zellij.is_internal() {
-                    if let Some(pane_id) = ws.pane_id {
+                    // Get pane_id from session associated with this workspace
+                    let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);
+                    let pane_id = workspace_index.and_then(|idx| {
+                        state.sessions_for_workspace(idx)
+                            .first()
+                            .and_then(|&si| state.sessions.get(si))
+                            .and_then(|s| s.pane_id)
+                    });
+
+                    if let Some(pane_id) = pane_id {
                         if let Err(e) = zellij.focus_pane(pane_id) {
                             state.status_message = Some(format!("Failed to focus pane: {}", e));
                         }
@@ -1062,7 +1215,16 @@ fn handle_action(
             if let Some(ws) = state.selected_workspace() {
                 if zellij.is_internal() {
                     // Internal mode: ペインを閉じる
-                    if let Some(pane_id) = ws.pane_id {
+                    // Get pane_id from session associated with this workspace
+                    let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);
+                    let pane_id = workspace_index.and_then(|idx| {
+                        state.sessions_for_workspace(idx)
+                            .first()
+                            .and_then(|&si| state.sessions.get(si))
+                            .and_then(|s| s.pane_id)
+                    });
+
+                    if let Some(pane_id) = pane_id {
                         if let Err(e) = zellij.close_pane(pane_id) {
                             state.status_message = Some(format!("Failed to close pane: {}", e));
                         }
