@@ -72,11 +72,18 @@ fn extract_worktree_info(path: &Path) -> Option<WorktreeInfo> {
     let repo = Repository::open(path).ok()?;
 
     // リポジトリ名を取得
-    let repo_name = path
+    // worktreeの場合、ディレクトリ名が "repo__branch" 形式になっている可能性がある
+    let dir_name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown");
+
+    // "__" 区切りの場合はベースリポジトリ名を抽出
+    let repo_name = if let Some(idx) = dir_name.find("__") {
+        dir_name[..idx].to_string()
+    } else {
+        dir_name.to_string()
+    };
 
     // ブランチ名を取得
     let branch = get_current_branch(&repo).unwrap_or_else(|| "detached".to_string());

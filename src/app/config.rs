@@ -5,11 +5,11 @@ use std::path::PathBuf;
 /// Worktreeパステンプレート
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WorktreePathStyle {
-    /// リポジトリと並列に配置: {repo_parent}/{repo}={branch}
-    /// 例: ~/work/config=feature-branch
+    /// リポジトリと並列に配置: {repo_parent}/{repo}__{branch}
+    /// 例: ~/work/config__feature-branch
     Parallel,
-    /// ghq形式で配置: {ghq_root}/{host}/{owner}/{repo}={branch}
-    /// 例: ~/ghq/github.com/stanah/config=feature-branch
+    /// ghq形式で配置: {ghq_root}/{host}/{owner}/{repo}__{branch}
+    /// 例: ~/ghq/github.com/stanah/config__feature-branch
     Ghq,
     /// リポジトリ内の.worktreesディレクトリ: {repo}/.worktrees/{branch}
     Subdirectory,
@@ -70,13 +70,13 @@ impl WorktreeConfig {
                     .and_then(|n| n.to_str())
                     .unwrap_or("repo");
                 let parent = repo_path.parent().unwrap_or(repo_path);
-                parent.join(format!("{}={}", repo_name, safe_branch))
+                parent.join(format!("{}__{}", repo_name, safe_branch))
             }
             WorktreePathStyle::Ghq => {
-                // ghq形式: {ghq_root}/{host}/{owner}/{repo}={branch}
+                // ghq形式: {ghq_root}/{host}/{owner}/{repo}__{branch}
                 if let (Some(ghq_root), Some(url)) = (&self.ghq_root, remote_url) {
                     if let Some((host, owner, repo)) = parse_git_url(url) {
-                        return ghq_root.join(host).join(owner).join(format!("{}={}", repo, safe_branch));
+                        return ghq_root.join(host).join(owner).join(format!("{}__{}", repo, safe_branch));
                     }
                 }
                 // フォールバック: Parallelスタイル
@@ -85,7 +85,7 @@ impl WorktreeConfig {
                     .and_then(|n| n.to_str())
                     .unwrap_or("repo");
                 let parent = repo_path.parent().unwrap_or(repo_path);
-                parent.join(format!("{}={}", repo_name, safe_branch))
+                parent.join(format!("{}__{}", repo_name, safe_branch))
             }
             WorktreePathStyle::Subdirectory => {
                 repo_path.join(".worktrees").join(&safe_branch)

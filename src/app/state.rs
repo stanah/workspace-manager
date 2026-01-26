@@ -267,9 +267,9 @@ impl AppState {
 
     /// ワークスペースからリポジトリキーを取得
     fn get_repo_key(&self, ws: &Workspace) -> String {
-        // Parallelスタイルのworktreeを検出: repo=branch 形式
-        // 例: config=feature -> config
-        if let Some(idx) = ws.repo_name.rfind('=') {
+        // Parallelスタイルのworktreeを検出: repo__branch 形式
+        // 例: config__feature -> config
+        if let Some(idx) = ws.repo_name.rfind("__") {
             let base_name = &ws.repo_name[..idx];
             // ベース名が空でなければそれを使用
             if !base_name.is_empty() {
@@ -542,8 +542,8 @@ impl AppState {
         let pattern1 = format!("{}/{}", repo_name, branch);
         // パターン2: ブランチ名のみ
         let pattern2 = branch;
-        // パターン3: "=" 形式のrepo名の場合、ベース名で検索
-        let base_repo = repo_name.split('=').next().unwrap_or(repo_name);
+        // パターン3: "__" 形式のrepo名の場合、ベース名で検索
+        let base_repo = repo_name.split("__").next().unwrap_or(repo_name);
         let pattern3 = format!("{}/{}", base_repo, branch);
 
         self.open_tabs.contains(&pattern1)
