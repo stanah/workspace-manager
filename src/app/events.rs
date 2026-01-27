@@ -126,8 +126,6 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
             // エディタで開く
             (KeyCode::Char('e'), _) => Action::OpenInEditor,
-            // ワークスペース閉じる（Backspace）
-            (KeyCode::Backspace, _) => Action::CloseWorkspace,
             // Zellijアクション
             (KeyCode::Char('l'), _) => Action::LaunchLazygit,
             (KeyCode::Char('g'), _) => Action::LaunchShell,
