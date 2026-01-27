@@ -66,6 +66,7 @@ pub enum TreeItem {
     Session {
         session_index: usize,
         is_last: bool,
+        parent_is_last: bool,
     },
     /// ブランチ（worktree未作成）
     Branch {
@@ -79,6 +80,7 @@ pub enum TreeItem {
         repo_path: String,
         expanded: bool,
         count: usize,
+        is_last: bool,
     },
 }
 
@@ -260,20 +262,7 @@ impl AppState {
                     (Vec::new(), Vec::new())
                 };
 
-            // ワークスペースごとのセッション数をカウント
-            let session_count: usize = indices
-                .iter()
-                .map(|&idx| self.sessions_for_workspace(idx).len())
-                .sum();
-
             let remote_expanded = self.expanded_remote_branches.contains(&repo_key);
-            let remote_item_count = if remote_branches.is_empty() {
-                0
-            } else {
-                1 + if remote_expanded { remote_branches.len() } else { 0 }
-            };
-            let total_items =
-                indices.len() + session_count + local_branches.len() + remote_item_count;
 
             // グループヘッダーを追加
             self.tree_items.push(TreeItem::RepoGroup {
@@ -285,39 +274,39 @@ impl AppState {
 
             // 展開されている場合はworktreeとセッション、ブランチを追加
             if is_expanded {
-                let mut item_count = 0;
+                let has_local_branches = !local_branches.is_empty();
+                let has_remote_branches = !remote_branches.is_empty();
+
+                // RepoGroup直下の子: Worktree群、Session群、ローカルBranch群、RemoteBranchGroup
+                // 各アイテムの is_last = 「同じ親の中で最後の子か」
 
                 // Worktreeとそのセッションを追加
                 for (ws_idx_pos, &ws_idx) in indices.iter().enumerate() {
                     let workspace_sessions = self.sessions_for_workspace(ws_idx);
-                    let is_last_worktree = ws_idx_pos == indices.len() - 1
-                        && local_branches.is_empty()
-                        && remote_branches.is_empty()
-                        && workspace_sessions.is_empty();
+                    let is_last_in_group = ws_idx_pos == indices.len() - 1
+                        && !has_local_branches
+                        && !has_remote_branches;
 
-                    item_count += 1;
                     self.tree_items.push(TreeItem::Worktree {
                         workspace_index: ws_idx,
-                        is_last: is_last_worktree && item_count == total_items,
+                        is_last: is_last_in_group,
                     });
 
                     // このワークスペースのセッションを追加
+                    let parent_last = is_last_in_group;
                     for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
-                        item_count += 1;
-                        let is_last_session = sess_idx_pos == workspace_sessions.len() - 1
-                            && is_last_worktree
-                            && item_count == total_items;
                         self.tree_items.push(TreeItem::Session {
                             session_index: sess_idx,
-                            is_last: is_last_session,
+                            is_last: sess_idx_pos == workspace_sessions.len() - 1,
+                            parent_is_last: parent_last,
                         });
                     }
                 }
 
                 // ローカルブランチを追加
-                for branch in local_branches {
-                    item_count += 1;
-                    let is_last = item_count == total_items;
+                let local_count = local_branches.len();
+                for (i, branch) in local_branches.into_iter().enumerate() {
+                    let is_last = i == local_count - 1 && !has_remote_branches;
                     self.tree_items.push(TreeItem::Branch {
                         name: branch,
                         is_local: true,
@@ -326,26 +315,25 @@ impl AppState {
                     });
                 }
 
-                // リモートブランチグループを追加
-                if !remote_branches.is_empty() {
+                // リモートブランチグループを追加（常にRepoGroup直下の最後の子）
+                if has_remote_branches {
                     let remote_count = remote_branches.len();
 
-                    item_count += 1;
                     self.tree_items.push(TreeItem::RemoteBranchGroup {
                         repo_path: repo_path.clone(),
                         expanded: remote_expanded,
                         count: remote_count,
+                        is_last: true, // リモートグループは常にRepoGroup内の最後
                     });
 
                     if remote_expanded {
-                        for branch in remote_branches {
-                            item_count += 1;
-                            let is_last = item_count == total_items;
+                        let branch_count = remote_branches.len();
+                        for (i, branch) in remote_branches.into_iter().enumerate() {
                             self.tree_items.push(TreeItem::Branch {
                                 name: branch,
                                 is_local: false,
                                 repo_path: repo_path.clone(),
-                                is_last,
+                                is_last: i == branch_count - 1, // RemoteBranchGroup内の最後
                             });
                         }
                     }

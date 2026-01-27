@@ -120,10 +120,13 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         TreeItem::Session {
             session_index,
             is_last,
+            parent_is_last,
         } => {
             // セッション行: ツールアイコンとステータスを表示
             if let Some(session) = state.sessions.get(*session_index) {
-                let tree_prefix = if *is_last { "  └ " } else { "  ├ " };
+                let continuation = if *parent_is_last { "  " } else { "│ " };
+                let branch_char = if *is_last { "└ " } else { "├ " };
+                let tree_prefix = format!("{}{}", continuation, branch_char);
 
                 // ツールアイコンとステータス
                 let tool_icon = session.tool.icon();
@@ -154,16 +157,20 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             }
         }
         TreeItem::RemoteBranchGroup {
-            expanded, count, ..
+            expanded,
+            count,
+            is_last,
+            ..
         } => {
             // リモートブランチグループ行
+            let tree_prefix = if *is_last { "└ " } else { "├ " };
             let expand_icon = if *expanded { "▼" } else { "▶" };
             let label_style = Style::default().fg(Color::DarkGray);
             let count_style = Style::default().fg(Color::DarkGray);
 
             Row::new(vec![Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled("├ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{} ", expand_icon), label_style),
                 Span::styled("Remote Branches", label_style),
                 Span::styled(format!(" ({})", count), count_style),
@@ -178,6 +185,9 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         } => {
             // ブランチ行（worktree未作成）- 控えめな暗い色で表示
             let tree_prefix = if *is_last { "└ " } else { "├ " };
+
+            // リモートブランチはRemoteBranchGroupの子として追加インデント
+            let indent = if *is_local { "  " } else { "    " };
 
             // リモートは "origin/..." 形式で表示
             let display_name = if *is_local {
@@ -195,7 +205,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             };
 
             Row::new(vec![Line::from(vec![
-                Span::styled("  ", Style::default()),
+                Span::styled(indent, Style::default()),
                 Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
                 Span::styled("  ", Style::default()), // アイコン分のスペース
                 Span::styled(display_name, name_style),
