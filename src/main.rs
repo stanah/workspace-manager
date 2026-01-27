@@ -209,7 +209,7 @@ fn handle_setup_plugin(no_load: bool) -> Result<()> {
 
 fn dirs_plugin() -> std::path::PathBuf {
     directories::BaseDirs::new()
-        .map(|d| d.config_dir().join("zellij/plugins"))
+        .map(|d| d.home_dir().join(".config/zellij/plugins"))
         .unwrap_or_else(|| std::path::PathBuf::from("~/.config/zellij/plugins"))
 }
 
