@@ -105,7 +105,7 @@ struct UserEntry {
 #[serde(untagged)]
 enum UserContent {
     Structured(UserContentStructured),
-    Other(serde_json::Value),
+    Other(#[allow(dead_code)] serde_json::Value),
 }
 
 /// Structured user content
@@ -124,6 +124,7 @@ struct PromptContent {
 
 #[derive(Debug, Deserialize)]
 struct ToolUseResultsContent {
+    #[allow(dead_code)]
     tool_use_results: Option<Vec<serde_json::Value>>,
 }
 

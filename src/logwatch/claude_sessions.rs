@@ -59,6 +59,7 @@ struct SessionEntry {
     session_id: String,
     /// Full path to the JSONL file
     #[serde(rename = "fullPath")]
+    #[allow(dead_code)]
     full_path: String,
     /// File modification time (Unix timestamp in milliseconds) - may be stale
     #[serde(rename = "fileMtime")]
