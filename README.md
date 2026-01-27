@@ -143,6 +143,56 @@ To receive status updates from Claude Code, add hooks to `~/.claude/settings.jso
 }
 ```
 
+## Zellij Tab Sync Plugin
+
+Zellijでタブを切り替えた際に、TUIのツリー選択を自動的に連動させるプラグインです。
+
+### セットアップ
+
+```bash
+# 一発セットアップ（ビルド → 配置 → Zellijにロード）
+workspace-manager setup-plugin
+```
+
+初回ロード時にZellij上でパーミッション確認ダイアログが表示されるので、許可してください。プラグインのペインは閉じても問題ありません（バックグラウンドで動作します）。
+
+### セットアップの詳細
+
+`setup-plugin` は内部で以下を実行します：
+
+1. `cargo build -p zellij-tab-sync --target wasm32-wasip1 --release`
+2. `~/.config/zellij/plugins/zellij_tab_sync.wasm` にコピー
+3. `zellij action start-or-reload-plugin` で現在のセッションにロード
+
+### オプション
+
+```bash
+# ビルド・配置のみ（Zellijへのロードをスキップ）
+workspace-manager setup-plugin --no-load
+```
+
+### 前提条件
+
+- `wasm32-wasip1` ターゲットがインストール済みであること
+  ```bash
+  rustup target add wasm32-wasip1
+  ```
+- workspace-managerリポジトリ内（またはその配下）で実行すること
+
+### Zellijセッション起動時に自動ロード
+
+レイアウトファイルに記述しておくと、セッション起動時に自動でロードされます：
+
+```kdl
+// ~/.config/zellij/layouts/default.kdl
+layout {
+    pane
+    pane {
+        plugin location="file:~/.config/zellij/plugins/zellij_tab_sync.wasm"
+    }
+}
+```
+
 ## Architecture
 
 ```

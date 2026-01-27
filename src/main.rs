@@ -45,6 +45,12 @@ enum Commands {
         #[command(subcommand)]
         action: NotifyAction,
     },
+    /// Setup Zellij tab-sync plugin (build, install, load)
+    SetupPlugin {
+        /// Only build and install without loading into current session
+        #[arg(long)]
+        no_load: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -78,6 +84,11 @@ enum NotifyAction {
         #[arg(long, env = "CLAUDE_SESSION_ID")]
         session_id: String,
     },
+    /// Notify tab focus change (from Zellij plugin)
+    TabFocus {
+        /// Tab name that received focus
+        tab_name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -93,6 +104,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Notify { action }) => handle_notify(action),
+        Some(Commands::SetupPlugin { no_load }) => handle_setup_plugin(no_load),
         Some(Commands::Tui) | None => run_tui(),
     }
 }
@@ -127,6 +139,7 @@ fn handle_notify(action: NotifyAction) -> Result<()> {
             message,
         },
         NotifyAction::Unregister { session_id } => NotifyMessage::Unregister { session_id },
+        NotifyAction::TabFocus { tab_name } => NotifyMessage::TabFocus { tab_name },
     };
 
     match notify::send_notification(&socket_path, &message) {
@@ -141,6 +154,88 @@ fn handle_notify(action: NotifyAction) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn handle_setup_plugin(no_load: bool) -> Result<()> {
+    use std::process::Command;
+
+    let plugin_name = "zellij_tab_sync.wasm";
+    let plugin_dir = dirs_plugin();
+    std::fs::create_dir_all(&plugin_dir)?;
+    let dest = plugin_dir.join(plugin_name);
+
+    // Step 1: Find the workspace root (where zellij-tab-sync/ lives)
+    let workspace_root = find_workspace_root()?;
+    let crate_dir = workspace_root.join("zellij-tab-sync");
+    if !crate_dir.exists() {
+        anyhow::bail!(
+            "zellij-tab-sync crate not found at {}. Run from the workspace-manager repository.",
+            crate_dir.display()
+        );
+    }
+
+    // Step 2: Build
+    eprintln!("Building zellij-tab-sync plugin...");
+    let status = Command::new("cargo")
+        .args(["build", "-p", "zellij-tab-sync", "--target", "wasm32-wasip1", "--release"])
+        .current_dir(&workspace_root)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Failed to build zellij-tab-sync plugin");
+    }
+
+    // Step 3: Copy to plugin dir
+    let built = workspace_root.join("target/wasm32-wasip1/release/zellij-tab-sync.wasm");
+    std::fs::copy(&built, &dest)?;
+    eprintln!("Installed: {}", dest.display());
+
+    // Step 4: Load into current Zellij session
+    if !no_load {
+        eprintln!("Loading plugin into Zellij...");
+        let load_status = Command::new("zellij")
+            .args(["action", "start-or-reload-plugin", &format!("file:{}", dest.display())])
+            .status();
+        match load_status {
+            Ok(s) if s.success() => eprintln!("Plugin loaded. Accept permissions in Zellij to activate."),
+            Ok(_) => eprintln!("Warning: Failed to load plugin. Is Zellij running?"),
+            Err(e) => eprintln!("Warning: Could not run zellij command: {}", e),
+        }
+    }
+
+    eprintln!("Done!");
+    Ok(())
+}
+
+fn dirs_plugin() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.config_dir().join("zellij/plugins"))
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.config/zellij/plugins"))
+}
+
+fn find_workspace_root() -> Result<std::path::PathBuf> {
+    // Try the directory of the current executable first
+    if let Ok(exe) = std::env::current_exe() {
+        // Check if we're running from a cargo build directory
+        // e.g., /path/to/workspace-manager/target/release/workspace-manager
+        let mut dir = exe.as_path();
+        while let Some(parent) = dir.parent() {
+            if parent.join("zellij-tab-sync").exists() {
+                return Ok(parent.to_path_buf());
+            }
+            dir = parent;
+        }
+    }
+    // Fall back to current directory and ancestors
+    let cwd = std::env::current_dir()?;
+    let mut dir = cwd.as_path();
+    loop {
+        if dir.join("zellij-tab-sync").exists() {
+            return Ok(dir.to_path_buf());
+        }
+        dir = dir.parent().ok_or_else(|| {
+            anyhow::anyhow!("Could not find workspace-manager repository root. Run from within the repo.")
+        })?;
     }
 }
 
@@ -878,6 +973,12 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
             tracing::info!("Session unregistered: external_id={}", external_id);
             state.remove_session(&external_id);
             state.rebuild_tree();
+        }
+        AppEvent::TabFocusChanged { tab_name } => {
+            tracing::info!("Tab focus changed: {}", tab_name);
+            if state.select_by_tab_name(&tab_name) {
+                state.status_message = Some(format!("Focused: {}", tab_name));
+            }
         }
         AppEvent::SessionStatusAnalyzed {
             external_id,

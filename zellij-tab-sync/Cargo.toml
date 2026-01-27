@@ -1,0 +1,9 @@
+[package]
+name = "zellij-tab-sync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zellij-tile = "0.43.1"
+
+

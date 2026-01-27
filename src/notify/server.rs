@@ -123,5 +123,6 @@ fn message_to_event(message: NotifyMessage) -> AppEvent {
             let external_id = claude_external_id(&session_id);
             AppEvent::SessionUnregister { external_id }
         }
+        NotifyMessage::TabFocus { tab_name } => AppEvent::TabFocusChanged { tab_name },
     }
 }

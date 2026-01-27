@@ -30,6 +30,12 @@ cargo run -- notify unregister --session-id $CLAUDE_SESSION_ID
 
 # Run tests
 cargo test
+
+# Setup Zellij tab-sync plugin (build, install, load)
+workspace-manager setup-plugin
+
+# Build plugin only (wasm32-wasip1 target required)
+cargo build -p zellij-tab-sync --target wasm32-wasip1 --release
 ```
 
 ## Architecture
@@ -63,9 +69,14 @@ src/
 │   └── actions.rs       # ZellijActions, ZellijMode, TabActionResult
 └── notify/
     ├── mod.rs           # Module exports, socket_path()
-    ├── protocol.rs      # NotifyMessage enum (Register/Status/Unregister)
+    ├── protocol.rs      # NotifyMessage enum (Register/Status/Unregister/TabFocus)
     ├── client.rs        # send_notification()
     └── server.rs        # run_listener() - async UDS server
+
+zellij-tab-sync/          # Zellij plugin (separate crate, wasm32-wasip1)
+├── Cargo.toml
+└── src/
+    └── main.rs           # ZellijPlugin: TabUpdate → notify tab-focus
 ```
 
 ### Key Dependencies

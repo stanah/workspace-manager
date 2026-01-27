@@ -31,6 +31,11 @@ pub enum NotifyMessage {
         /// Session ID from the AI CLI tool
         session_id: String,
     },
+    /// Tab focus changed (from Zellij plugin)
+    TabFocus {
+        /// Tab name that received focus
+        tab_name: String,
+    },
 }
 
 impl NotifyMessage {
@@ -40,6 +45,7 @@ impl NotifyMessage {
             NotifyMessage::Register { session_id, .. } => session_id,
             NotifyMessage::Status { session_id, .. } => session_id,
             NotifyMessage::Unregister { session_id } => session_id,
+            NotifyMessage::TabFocus { tab_name } => tab_name,
         }
     }
 }

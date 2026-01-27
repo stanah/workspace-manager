@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "zellij-tab-sync"]
+
 [package]
 name = "workspace-manager"
 version = "0.1.0"

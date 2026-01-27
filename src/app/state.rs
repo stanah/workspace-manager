@@ -715,6 +715,28 @@ impl AppState {
             || self.open_tabs.contains(&pattern3)
     }
 
+    /// タブ名でワークスペースを選択
+    /// タブ名は "{repo}/{branch}" 形式を想定し、各ワークスペースと照合する
+    pub fn select_by_tab_name(&mut self, tab_name: &str) -> bool {
+        for (idx, item) in self.tree_items.iter().enumerate() {
+            if let TreeItem::Worktree { workspace_index, .. } = item {
+                if let Some(ws) = self.workspaces.get(*workspace_index) {
+                    // パターン1: "{repo}/{branch}" 形式
+                    let pattern1 = format!("{}/{}", ws.repo_name, ws.branch);
+                    // パターン2: "__" 形式のrepo名のベース名
+                    let base_repo = ws.repo_name.split("__").next().unwrap_or(&ws.repo_name);
+                    let pattern2 = format!("{}/{}", base_repo, ws.branch);
+
+                    if tab_name == pattern1 || tab_name == pattern2 || tab_name == ws.branch {
+                        self.selected_index = idx;
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// 選択中のリポジトリグループのパスを取得
     pub fn selected_repo_path(&self) -> Option<String> {
         // 現在選択中のアイテムがWorktreeの場合はそのワークスペースのパスを返す

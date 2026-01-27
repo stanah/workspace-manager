@@ -35,6 +35,10 @@ pub enum AppEvent {
         project_path: String,
         status: crate::logwatch::SessionStatus,
     },
+    /// タブフォーカス変更（Zellijプラグインからの通知）
+    TabFocusChanged {
+        tab_name: String,
+    },
     /// リフレッシュ要求
     Refresh,
     /// 終了要求
