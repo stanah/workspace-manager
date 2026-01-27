@@ -45,12 +45,8 @@ enum Commands {
         #[command(subcommand)]
         action: NotifyAction,
     },
-    /// Setup Zellij tab-sync plugin (build, install, load)
-    SetupPlugin {
-        /// Only build and install without loading into current session
-        #[arg(long)]
-        no_load: bool,
-    },
+    /// Setup Zellij tab-sync plugin (build and install)
+    SetupPlugin,
 }
 
 #[derive(Subcommand)]
@@ -104,7 +100,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Notify { action }) => handle_notify(action),
-        Some(Commands::SetupPlugin { no_load }) => handle_setup_plugin(no_load),
+        Some(Commands::SetupPlugin) => handle_setup_plugin(),
         Some(Commands::Tui) | None => run_tui(),
     }
 }
@@ -157,7 +153,7 @@ fn handle_notify(action: NotifyAction) -> Result<()> {
     }
 }
 
-fn handle_setup_plugin(no_load: bool) -> Result<()> {
+fn handle_setup_plugin() -> Result<()> {
     use std::process::Command;
 
     let plugin_name = "zellij_tab_sync.wasm";
@@ -190,20 +186,20 @@ fn handle_setup_plugin(no_load: bool) -> Result<()> {
     std::fs::copy(&built, &dest)?;
     eprintln!("Installed: {}", dest.display());
 
-    // Step 4: Load into current Zellij session
-    if !no_load {
-        eprintln!("Loading plugin into Zellij...");
-        let load_status = Command::new("zellij")
-            .args(["action", "start-or-reload-plugin", &format!("file:{}", dest.display())])
-            .status();
-        match load_status {
-            Ok(s) if s.success() => eprintln!("Plugin loaded. Accept permissions in Zellij to activate."),
-            Ok(_) => eprintln!("Warning: Failed to load plugin. Is Zellij running?"),
-            Err(e) => eprintln!("Warning: Could not run zellij command: {}", e),
-        }
-    }
+    eprintln!();
+    eprintln!("To load the plugin, add the following to your Zellij config.kdl:");
+    eprintln!();
+    eprintln!("  plugin_aliases {{");
+    eprintln!("    \"tab-sync\" {{");
+    eprintln!("      location \"file:{}\"", dest.display());
+    eprintln!("    }}");
+    eprintln!("  }}");
+    eprintln!("  load_plugins {{");
+    eprintln!("    \"tab-sync\"");
+    eprintln!("  }}");
+    eprintln!();
+    eprintln!("Then restart your Zellij session to activate.");
 
-    eprintln!("Done!");
     Ok(())
 }
 

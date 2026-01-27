@@ -149,27 +149,28 @@ Zellijでタブを切り替えた際に、TUIのツリー選択を自動的に�
 
 ### セットアップ
 
+1. プラグインをビルド・インストール：
+
 ```bash
-# 一発セットアップ（ビルド → 配置 → Zellijにロード）
 workspace-manager setup-plugin
 ```
 
-初回ロード時にZellij上でパーミッション確認ダイアログが表示されるので、許可してください。プラグインのペインは閉じても問題ありません（バックグラウンドで動作します）。
+2. Zellijの `config.kdl` に以下を追加：
 
-### セットアップの詳細
-
-`setup-plugin` は内部で以下を実行します：
-
-1. `cargo build -p zellij-tab-sync --target wasm32-wasip1 --release`
-2. `~/.config/zellij/plugins/zellij_tab_sync.wasm` にコピー
-3. `zellij action start-or-reload-plugin` で現在のセッションにロード
-
-### オプション
-
-```bash
-# ビルド・配置のみ（Zellijへのロードをスキップ）
-workspace-manager setup-plugin --no-load
+```kdl
+plugin_aliases {
+    "tab-sync" {
+        location "file:~/.config/zellij/plugins/zellij_tab_sync.wasm"
+    }
+}
+load_plugins {
+    "tab-sync"
+}
 ```
+
+3. Zellijセッションを再起動して有効化
+
+初回ロード時にパーミッション確認ダイアログが表示されるので、許可してください。`load_plugins` によりバックグラウンドで動作するため、ペインは開きません。
 
 ### 前提条件
 
@@ -178,20 +179,6 @@ workspace-manager setup-plugin --no-load
   rustup target add wasm32-wasip1
   ```
 - workspace-managerリポジトリ内（またはその配下）で実行すること
-
-### Zellijセッション起動時に自動ロード
-
-レイアウトファイルに記述しておくと、セッション起動時に自動でロードされます：
-
-```kdl
-// ~/.config/zellij/layouts/default.kdl
-layout {
-    pane
-    pane {
-        plugin location="file:~/.config/zellij/plugins/zellij_tab_sync.wasm"
-    }
-}
-```
 
 ## Architecture
 
