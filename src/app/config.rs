@@ -38,7 +38,7 @@ pub struct WorktreeConfig {
 }
 
 fn default_max_remote_branches() -> usize {
-    10
+    100
 }
 
 impl Default for WorktreeConfig {

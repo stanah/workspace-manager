@@ -153,6 +153,23 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 Row::new(vec![Line::from("    └ <invalid session>")]).height(1)
             }
         }
+        TreeItem::RemoteBranchGroup {
+            expanded, count, ..
+        } => {
+            // リモートブランチグループ行
+            let expand_icon = if *expanded { "▼" } else { "▶" };
+            let label_style = Style::default().fg(Color::DarkGray);
+            let count_style = Style::default().fg(Color::DarkGray);
+
+            Row::new(vec![Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled("├ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ", expand_icon), label_style),
+                Span::styled("Remote Branches", label_style),
+                Span::styled(format!(" ({})", count), count_style),
+            ])])
+            .height(1)
+        }
         TreeItem::Branch {
             name,
             is_local,

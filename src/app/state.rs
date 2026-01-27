@@ -25,19 +25,16 @@ pub enum ListDisplayMode {
     /// 既存worktreeのみ表示
     #[default]
     Worktrees,
-    /// worktree + ローカルブランチ
-    WithLocalBranches,
-    /// worktree + ローカル + リモートブランチ
-    WithAllBranches,
+    /// worktree + 全ブランチ（ローカル＋リモート）
+    WithBranches,
 }
 
 impl ListDisplayMode {
     /// 次の表示モードに切り替え
     pub fn next(self) -> Self {
         match self {
-            Self::Worktrees => Self::WithLocalBranches,
-            Self::WithLocalBranches => Self::WithAllBranches,
-            Self::WithAllBranches => Self::Worktrees,
+            Self::Worktrees => Self::WithBranches,
+            Self::WithBranches => Self::Worktrees,
         }
     }
 
@@ -45,8 +42,7 @@ impl ListDisplayMode {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Worktrees => "Worktrees",
-            Self::WithLocalBranches => "+Local",
-            Self::WithAllBranches => "+All",
+            Self::WithBranches => "+Branches",
         }
     }
 }
@@ -78,6 +74,12 @@ pub enum TreeItem {
         repo_path: String,
         is_last: bool,
     },
+    /// リモートブランチグループ（折りたたみ可能）
+    RemoteBranchGroup {
+        repo_path: String,
+        expanded: bool,
+        count: usize,
+    },
 }
 
 /// アプリケーション状態
@@ -90,6 +92,8 @@ pub struct AppState {
     pub tree_items: Vec<TreeItem>,
     /// 折りたたまれたリポジトリのパス
     collapsed_repos: HashSet<String>,
+    /// 折りたたまれたリモートブランチグループのリポパス
+    expanded_remote_branches: HashSet<String>,
     /// external_id -> session index のマッピング
     session_map: HashMap<String, usize>,
     /// workspace_index -> session indices のマッピング
@@ -122,6 +126,7 @@ impl AppState {
             sessions: Vec::new(),
             tree_items: Vec::new(),
             collapsed_repos: HashSet::new(),
+            expanded_remote_branches: HashSet::new(),
             session_map: HashMap::new(),
             sessions_by_workspace: HashMap::new(),
             selected_index: 0,
@@ -225,7 +230,7 @@ impl AppState {
                             .filter(|b| !existing_branches.contains(b) && matches_filter(b))
                             .collect::<Vec<_>>();
 
-                        let remote = if self.list_display_mode == ListDisplayMode::WithAllBranches {
+                        let remote = if self.list_display_mode == ListDisplayMode::WithBranches {
                             let max_branches = manager.config().max_remote_branches;
                             let branches: Vec<_> = manager
                                 .list_remote_branches(std::path::Path::new(&repo_path))
@@ -261,8 +266,14 @@ impl AppState {
                 .map(|&idx| self.sessions_for_workspace(idx).len())
                 .sum();
 
+            let remote_expanded = self.expanded_remote_branches.contains(&repo_key);
+            let remote_item_count = if remote_branches.is_empty() {
+                0
+            } else {
+                1 + if remote_expanded { remote_branches.len() } else { 0 }
+            };
             let total_items =
-                indices.len() + session_count + local_branches.len() + remote_branches.len();
+                indices.len() + session_count + local_branches.len() + remote_item_count;
 
             // グループヘッダーを追加
             self.tree_items.push(TreeItem::RepoGroup {
@@ -315,16 +326,29 @@ impl AppState {
                     });
                 }
 
-                // リモートブランチを追加
-                for branch in remote_branches {
+                // リモートブランチグループを追加
+                if !remote_branches.is_empty() {
+                    let remote_count = remote_branches.len();
+
                     item_count += 1;
-                    let is_last = item_count == total_items;
-                    self.tree_items.push(TreeItem::Branch {
-                        name: branch,
-                        is_local: false,
+                    self.tree_items.push(TreeItem::RemoteBranchGroup {
                         repo_path: repo_path.clone(),
-                        is_last,
+                        expanded: remote_expanded,
+                        count: remote_count,
                     });
+
+                    if remote_expanded {
+                        for branch in remote_branches {
+                            item_count += 1;
+                            let is_last = item_count == total_items;
+                            self.tree_items.push(TreeItem::Branch {
+                                name: branch,
+                                is_local: false,
+                                repo_path: repo_path.clone(),
+                                is_last,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -533,16 +557,110 @@ impl AppState {
 
     /// 選択中のアイテムを展開/折りたたみ
     pub fn toggle_expand(&mut self) {
-        if let Some(TreeItem::RepoGroup { path, expanded, .. }) =
-            self.tree_items.get(self.selected_index).cloned()
-        {
-            if expanded {
-                self.collapsed_repos.insert(path);
-            } else {
-                self.collapsed_repos.remove(&path);
+        match self.tree_items.get(self.selected_index).cloned() {
+            Some(TreeItem::RepoGroup { path, expanded, .. }) => {
+                if expanded {
+                    self.collapsed_repos.insert(path);
+                } else {
+                    self.collapsed_repos.remove(&path);
+                }
             }
-            self.rebuild_tree();
+            Some(TreeItem::RemoteBranchGroup { repo_path, expanded, .. }) => {
+                let repo_key = self.find_repo_key_for_path(&repo_path);
+                if expanded {
+                    self.expanded_remote_branches.remove(&repo_key);
+                } else {
+                    self.expanded_remote_branches.insert(repo_key);
+                }
+            }
+            _ => {}
         }
+    }
+
+    /// 選択中のアイテムを展開（右キー）
+    /// 注意: 呼び出し側で rebuild_tree_with_manager() を呼ぶこと
+    pub fn expand(&mut self) {
+        match self.tree_items.get(self.selected_index).cloned() {
+            Some(TreeItem::RepoGroup { path, expanded, .. }) => {
+                if !expanded {
+                    self.collapsed_repos.remove(&path);
+                }
+            }
+            Some(TreeItem::RemoteBranchGroup { repo_path, expanded, .. }) => {
+                if !expanded {
+                    let repo_key = self.find_repo_key_for_path(&repo_path);
+                    self.expanded_remote_branches.insert(repo_key);
+                }
+            }
+            Some(TreeItem::Worktree { .. })
+            | Some(TreeItem::Session { .. })
+            | Some(TreeItem::Branch { .. }) => {
+                // 子アイテム: 親RepoGroupへ移動
+                self.move_to_parent_repo_group();
+            }
+            None => {}
+        }
+    }
+
+    /// 選択中のアイテムを折りたたみ（左キー）
+    /// 注意: 呼び出し側で rebuild_tree_with_manager() を呼ぶこと
+    pub fn collapse(&mut self) {
+        match self.tree_items.get(self.selected_index).cloned() {
+            Some(TreeItem::RepoGroup { path, expanded, .. }) => {
+                if expanded {
+                    self.collapsed_repos.insert(path);
+                }
+            }
+            Some(TreeItem::RemoteBranchGroup { repo_path, expanded, .. }) => {
+                if expanded {
+                    let repo_key = self.find_repo_key_for_path(&repo_path);
+                    self.expanded_remote_branches.remove(&repo_key);
+                } else {
+                    // 折りたたみ済みなら親RepoGroupへ移動
+                    self.move_to_parent_repo_group();
+                }
+            }
+            Some(TreeItem::Worktree { .. })
+            | Some(TreeItem::Session { .. })
+            | Some(TreeItem::Branch { .. }) => {
+                // 子アイテム: 親RepoGroupに移動して折りたたみ
+                if let Some(parent_idx) = self.find_parent_repo_group_index() {
+                    self.selected_index = parent_idx;
+                    if let Some(TreeItem::RepoGroup { path, .. }) = self.tree_items.get(parent_idx).cloned() {
+                        self.collapsed_repos.insert(path);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// 親RepoGroupのインデックスを探す
+    fn find_parent_repo_group_index(&self) -> Option<usize> {
+        for i in (0..self.selected_index).rev() {
+            if matches!(self.tree_items.get(i), Some(TreeItem::RepoGroup { .. })) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// 親RepoGroupへカーソル移動
+    fn move_to_parent_repo_group(&mut self) {
+        if let Some(idx) = self.find_parent_repo_group_index() {
+            self.selected_index = idx;
+        }
+    }
+
+    /// repo_pathからrepo_keyを逆引き
+    fn find_repo_key_for_path(&self, repo_path: &str) -> String {
+        for ws in &self.workspaces {
+            if ws.project_path == repo_path {
+                return self.get_repo_key(ws);
+            }
+        }
+        // フォールバック: repo_pathをそのまま使用
+        repo_path.to_string()
     }
 
     /// 現在選択中のワークスペースを取得
@@ -556,7 +674,9 @@ impl AppState {
                     self.workspaces.get(s.workspace_index)
                 })
             }
-            Some(TreeItem::RepoGroup { .. }) | Some(TreeItem::Branch { .. }) => {
+            Some(TreeItem::RepoGroup { .. })
+            | Some(TreeItem::Branch { .. })
+            | Some(TreeItem::RemoteBranchGroup { .. }) => {
                 // グループまたはブランチが選択されている場合はNone
                 None
             }
@@ -756,6 +876,7 @@ impl AppState {
                 })
             }
             Some(TreeItem::Branch { repo_path, .. }) => Some(repo_path.clone()),
+            Some(TreeItem::RemoteBranchGroup { repo_path, .. }) => Some(repo_path.clone()),
             Some(TreeItem::RepoGroup { path, .. }) => {
                 // このグループの最初のworktreeを探す
                 for item in &self.tree_items {

@@ -94,6 +94,10 @@ pub enum Action {
     MouseDoubleClick(u16),
     /// マウスミドルクリックで行選択＋ワークスペース閉じる
     MouseMiddleClick(u16),
+    /// 展開（右キー）
+    Expand,
+    /// 折りたたみ（左キー）
+    Collapse,
     /// ブランチフィルター
     FilterBranches,
     /// フィルタークリア
@@ -108,6 +112,9 @@ impl From<KeyEvent> for Action {
             // 移動
             (KeyCode::Up | KeyCode::Char('k'), _) => Action::MoveUp,
             (KeyCode::Down | KeyCode::Char('j'), _) => Action::MoveDown,
+            // 展開/折りたたみ（左右キー）
+            (KeyCode::Left, _) => Action::Collapse,
+            (KeyCode::Right, _) => Action::Expand,
             // レイアウト選択して開く (Tab)
             (KeyCode::Tab, _) => Action::SelectWithLayout,
             // 選択

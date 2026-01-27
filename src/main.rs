@@ -595,7 +595,7 @@ fn run_app(
                     });
                 }
             }
-            handle_notify_event(state, event);
+            handle_notify_event(state, event, worktree_manager);
         }
 
         // 1秒ごとにZellijタブ状態とワークスペースリストを更新（100ms × 10回 = 1秒）
@@ -922,7 +922,7 @@ fn handle_selection_event(
 }
 
 /// Handle notify events from the UDS listener
-fn handle_notify_event(state: &mut AppState, event: AppEvent) {
+fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: &WorktreeManager) {
     match event {
         AppEvent::SessionRegister {
             external_id,
@@ -949,7 +949,7 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
                     external_id
                 );
                 // Rebuild tree to show the new session
-                state.rebuild_tree();
+                state.rebuild_tree_with_manager(Some(worktree_manager));
             } else {
                 tracing::warn!(
                     "No matching workspace found for path: {}",
@@ -972,7 +972,7 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
         AppEvent::SessionUnregister { external_id } => {
             tracing::info!("Session unregistered: external_id={}", external_id);
             state.remove_session(&external_id);
-            state.rebuild_tree();
+            state.rebuild_tree_with_manager(Some(worktree_manager));
         }
         AppEvent::TabFocusChanged { tab_name } => {
             tracing::info!("Tab focus changed: {}", tab_name);
@@ -1010,7 +1010,7 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent) {
                 ) {
                     tracing::debug!("Auto-registered session from polling: {}", external_id);
                     // Rebuild tree to show the new session
-                    state.rebuild_tree();
+                    state.rebuild_tree_with_manager(Some(worktree_manager));
                 }
             }
 
@@ -1176,6 +1176,15 @@ fn handle_action(
         }
         Action::ToggleExpand => {
             state.toggle_expand();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
+        }
+        Action::Expand => {
+            state.expand();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
+        }
+        Action::Collapse => {
+            state.collapse();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
         }
         Action::ToggleDisplayMode => {
             state.toggle_display_mode();
