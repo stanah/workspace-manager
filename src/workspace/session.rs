@@ -80,8 +80,8 @@ impl AiTool {
     /// Get short icon/prefix for display
     pub fn icon(&self) -> &'static str {
         match self {
-            AiTool::Claude => "[C]",
-            AiTool::Kiro => "[K]",
+            AiTool::Claude => "✻",
+            AiTool::Kiro => "\u{F02A0}",
             AiTool::OpenCode => "[O]",
             AiTool::Codex => "[X]",
         }
@@ -92,7 +92,7 @@ impl AiTool {
         use ratatui::style::Color;
         match self {
             AiTool::Claude => Color::Rgb(204, 119, 34), // Orange/brown for Claude
-            AiTool::Kiro => Color::Rgb(255, 153, 0),    // AWS Orange for Kiro
+            AiTool::Kiro => Color::Rgb(153, 102, 204),   // Purple for Kiro
             AiTool::OpenCode => Color::Cyan,
             AiTool::Codex => Color::Green,
         }
