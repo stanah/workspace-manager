@@ -678,6 +678,15 @@ fn run_app(
     Ok(())
 }
 
+/// タブ切り替え/作成後にpost_select_commandを実行
+fn run_post_select_command(config: &Config) {
+    if let Some(ref cmd) = config.zellij.post_select_command {
+        if let Err(e) = ZellijActions::run_post_select_command(cmd) {
+            tracing::warn!("post_select_command failed: {}", e);
+        }
+    }
+}
+
 /// 入力モードでのキーイベント処理
 fn handle_input_event(
     state: &mut AppState,
@@ -865,9 +874,11 @@ fn handle_selection_event(
                         match zellij.open_workspace_tab(&tab_name, cwd, layout) {
                             Ok(TabActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {}", name));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));
@@ -899,9 +910,11 @@ fn handle_selection_event(
                         match zellij.open_workspace_tab(&tab_name, cwd, layout) {
                             Ok(TabActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {} (layout: {})", name, selected_item));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));
@@ -1107,9 +1120,11 @@ fn handle_action(
                         match zellij.open_workspace_tab(&tab_name, cwd, layout) {
                             Ok(TabActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {}", name));
+                                run_post_select_command(config);
                             }
                             Ok(TabActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));

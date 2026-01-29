@@ -390,6 +390,10 @@ pub struct ZellijConfig {
     pub tab_name_template: String,
     /// AIコマンド（claude, kiro-cli, codex など）
     pub ai_command: String,
+    /// タブ切り替え後に実行するコマンド（ターミナルのタブ移動等）
+    /// 例: "osascript -e 'tell application \"System Events\" to keystroke \"]\" using {command down, shift down}'"
+    #[serde(default)]
+    pub post_select_command: Option<String>,
 }
 
 impl Default for ZellijConfig {
@@ -404,6 +408,7 @@ impl Default for ZellijConfig {
             layout_dir,
             tab_name_template: "{repo}/{branch}".to_string(),
             ai_command: "claude".to_string(),
+            post_select_command: None,
         }
     }
 }

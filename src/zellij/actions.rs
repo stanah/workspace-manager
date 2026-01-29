@@ -385,6 +385,18 @@ impl ZellijActions {
 
         Ok(())
     }
+
+    /// タブ切り替え後にシェルコマンドを実行（非同期spawn）
+    pub fn run_post_select_command(command: &str) -> Result<()> {
+        Command::new("sh")
+            .args(["-c", command])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("Failed to execute post_select_command")?;
+        Ok(())
+    }
 }
 
 impl Default for ZellijActions {
