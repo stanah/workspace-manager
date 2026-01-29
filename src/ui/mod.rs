@@ -33,7 +33,7 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 /// メインUIを描画
-pub fn render(frame: &mut Frame, state: &AppState) {
+pub fn render(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
 
     // メインレイアウト: ワークスペース一覧 + ステータスバー

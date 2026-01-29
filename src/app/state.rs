@@ -2,6 +2,7 @@ use crate::workspace::{
     AiTool, Session, SessionStatus, Workspace, WorktreeManager, get_default_search_paths,
     scan_for_repositories,
 };
+use ratatui::widgets::TableState;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -119,6 +120,8 @@ pub struct AppState {
     open_tabs: HashSet<String>,
     /// ブランチフィルター（検索文字列）
     pub branch_filter: Option<String>,
+    /// テーブルのスクロール状態（フレーム間で維持）
+    pub table_state: TableState,
 }
 
 impl AppState {
@@ -141,6 +144,7 @@ impl AppState {
             status_message: None,
             open_tabs: HashSet::new(),
             branch_filter: None,
+            table_state: TableState::default(),
         }
     }
 
@@ -530,17 +534,23 @@ impl AppState {
 
     // ===== Navigation =====
 
+    /// 選択インデックスを設定し、テーブルのスクロール状態も同期する
+    pub fn set_selected_index(&mut self, index: usize) {
+        self.selected_index = index;
+        self.table_state.select(Some(index));
+    }
+
     /// 選択を上に移動
     pub fn move_up(&mut self) {
         if !self.tree_items.is_empty() && self.selected_index > 0 {
-            self.selected_index -= 1;
+            self.set_selected_index(self.selected_index - 1);
         }
     }
 
     /// 選択を下に移動
     pub fn move_down(&mut self) {
         if !self.tree_items.is_empty() && self.selected_index < self.tree_items.len() - 1 {
-            self.selected_index += 1;
+            self.set_selected_index(self.selected_index + 1);
         }
     }
 
@@ -614,7 +624,7 @@ impl AppState {
             | Some(TreeItem::Branch { .. }) => {
                 // 子アイテム: 親RepoGroupに移動して折りたたみ
                 if let Some(parent_idx) = self.find_parent_repo_group_index() {
-                    self.selected_index = parent_idx;
+                    self.set_selected_index(parent_idx);
                     if let Some(TreeItem::RepoGroup { path, .. }) = self.tree_items.get(parent_idx).cloned() {
                         self.collapsed_repos.insert(path);
                     }
@@ -637,7 +647,7 @@ impl AppState {
     /// 親RepoGroupへカーソル移動
     fn move_to_parent_repo_group(&mut self) {
         if let Some(idx) = self.find_parent_repo_group_index() {
-            self.selected_index = idx;
+            self.set_selected_index(idx);
         }
     }
 
@@ -837,7 +847,7 @@ impl AppState {
                     let pattern2 = format!("{}/{}", base_repo, ws.branch);
 
                     if tab_name == pattern1 || tab_name == pattern2 || tab_name == ws.branch {
-                        self.selected_index = idx;
+                        self.set_selected_index(idx);
                         return true;
                     }
                 }

@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Row, Table, TableState},
+    widgets::{Block, Borders, Row, Table},
     Frame,
 };
 
@@ -10,7 +10,7 @@ use crate::app::{AppState, TreeItem};
 use crate::workspace::SessionStatus;
 
 /// ワークスペース一覧をツリー形式で描画
-pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let rows: Vec<Row> = state
         .tree_items
         .iter()
@@ -34,10 +34,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    let mut table_state = TableState::default();
-    table_state.select(Some(state.selected_index));
-
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_stateful_widget(table, area, &mut state.table_state);
 }
 
 fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<'static> {

@@ -1328,14 +1328,14 @@ fn handle_action(
         Action::MouseSelect(row) => {
             let index = row as usize;
             if index < state.tree_item_count() {
-                state.selected_index = index;
+                state.set_selected_index(index);
             }
         }
         Action::MouseDoubleClick(row) => {
             // まず行を選択
             let index = row as usize;
             if index < state.tree_item_count() {
-                state.selected_index = index;
+                state.set_selected_index(index);
             }
             // Action::Selectと同じ処理を実行（再帰的に呼び出し）
             handle_action(state, zellij, config, _worktree_manager, Action::Select)?;
@@ -1344,7 +1344,7 @@ fn handle_action(
             // まず行を選択
             let index = row as usize;
             if index < state.tree_item_count() {
-                state.selected_index = index;
+                state.set_selected_index(index);
             }
             // Action::CloseWorkspaceと同じ処理を実行（再帰的に呼び出し）
             handle_action(state, zellij, config, _worktree_manager, Action::CloseWorkspace)?;
