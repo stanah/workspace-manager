@@ -103,7 +103,7 @@ impl InputDialog {
 
 /// 入力ダイアログを描画
 pub fn render(frame: &mut Frame, area: Rect, dialog: &InputDialog) {
-    let popup_area = centered_rect(60, 30, area);
+    let popup_area = centered_rect(100, 30, area);
     frame.render_widget(Clear, popup_area);
 
     let (title, prompt, hint) = match &dialog.kind {
