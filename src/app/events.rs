@@ -82,6 +82,8 @@ pub enum Action {
     CreateWorktree,
     /// worktree削除
     DeleteWorktree,
+    /// worktree強制削除（submodule含む場合など）
+    ForceDeleteWorktree,
     /// エディタで開く
     OpenInEditor,
     /// マウスクリックで行選択
@@ -135,6 +137,7 @@ impl From<KeyEvent> for Action {
             // Worktree管理
             (KeyCode::Char('c'), _) | (KeyCode::Char('a'), _) => Action::CreateWorktree,
             (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
+            (KeyCode::Char('D'), _) => Action::ForceDeleteWorktree,
             // エディタで開く
             (KeyCode::Char('e'), _) => Action::OpenInEditor,
             // Zellijアクション

@@ -738,10 +738,10 @@ impl AppState {
     }
 
     /// worktree削除ダイアログを開く
-    pub fn open_delete_worktree_dialog(&mut self) {
+    pub fn open_delete_worktree_dialog(&mut self, force: bool) {
         if let Some(ws) = self.selected_workspace() {
             let path = ws.display_path();
-            self.input_dialog = Some(InputDialog::new_delete_worktree(path));
+            self.input_dialog = Some(InputDialog::new_delete_worktree(path, force));
             self.view_mode = ViewMode::Input;
         }
     }

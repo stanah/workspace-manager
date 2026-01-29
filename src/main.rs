@@ -751,7 +751,7 @@ fn handle_input_event(
             }
         }
         KeyCode::Char('y') => {
-            if let Some(InputDialogKind::DeleteWorktree { path }) = dialog_kind {
+            if let Some(InputDialogKind::DeleteWorktree { path, force }) = dialog_kind {
                 if let Some(ref rp) = repo_path {
                     // チルダを展開
                     let expanded_path = if path.starts_with("~/") {
@@ -767,7 +767,7 @@ fn handle_input_event(
                     match worktree_manager.remove_worktree(
                         Path::new(rp),
                         &expanded_path,
-                        false,
+                        force,
                     ) {
                         Ok(()) => {
                             state.status_message = Some(format!("Deleted worktree: {}", path));
@@ -1224,7 +1224,10 @@ fn handle_action(
             }
         }
         Action::DeleteWorktree => {
-            state.open_delete_worktree_dialog();
+            state.open_delete_worktree_dialog(false);
+        }
+        Action::ForceDeleteWorktree => {
+            state.open_delete_worktree_dialog(true);
         }
         Action::OpenInEditor => {
             if let Some(ws) = state.selected_workspace() {

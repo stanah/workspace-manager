@@ -62,6 +62,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::styled("  d    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Delete worktree"),
         ]),
+        Line::from(vec![
+            Span::styled("  D    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Force delete worktree (submodules etc.)"),
+        ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Zellij Actions", Style::default().add_modifier(Modifier::BOLD)),

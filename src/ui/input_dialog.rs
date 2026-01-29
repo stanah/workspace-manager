@@ -13,7 +13,7 @@ pub enum InputDialogKind {
     /// 新規worktree作成（ブランチ名入力）
     CreateWorktree,
     /// worktree削除確認
-    DeleteWorktree { path: String },
+    DeleteWorktree { path: String, force: bool },
     /// ブランチフィルター
     FilterBranches,
 }
@@ -37,9 +37,9 @@ impl InputDialog {
         }
     }
 
-    pub fn new_delete_worktree(path: String) -> Self {
+    pub fn new_delete_worktree(path: String, force: bool) -> Self {
         Self {
-            kind: InputDialogKind::DeleteWorktree { path },
+            kind: InputDialogKind::DeleteWorktree { path, force },
             input: String::new(),
             cursor_position: 0,
             error_message: None,
@@ -112,9 +112,9 @@ pub fn render(frame: &mut Frame, area: Rect, dialog: &InputDialog) {
             "Branch name:".to_string(),
             "Enter: create | Esc: cancel".to_string(),
         ),
-        InputDialogKind::DeleteWorktree { path } => (
-            " Delete Worktree ".to_string(),
-            format!("Delete {}?", path),
+        InputDialogKind::DeleteWorktree { path, force } => (
+            if *force { " Force Delete Worktree " } else { " Delete Worktree " }.to_string(),
+            format!("{}Delete {}?", if *force { "[FORCE] " } else { "" }, path),
             "y: confirm | n/Esc: cancel".to_string(),
         ),
         InputDialogKind::FilterBranches => (
