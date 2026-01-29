@@ -1,11 +1,11 @@
 # UI Module Codemap
 
-**Last Updated:** 2025-01-26
+**Last Updated:** 2026-01-30
 **Location:** `src/ui/`
 
 ## Overview
 
-The UI module provides terminal rendering using ratatui, implementing a tree-based workspace list with overlay dialogs.
+The UI module provides terminal rendering using ratatui, implementing a tree-based workspace list with overlay dialogs and session status display.
 
 ## Structure
 
@@ -27,8 +27,8 @@ src/ui/
 │                      Workspace List                              │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ > repo-name                                          [3]   │ │
-│  │   ├─ main         ~/work/repo           [Working]         │ │
-│  │   ├─ feature-a    ~/work/repo=feature-a [Idle]      [*]   │ │
+│  │   ├─ main         ~/work/repo           [C]● working      │ │
+│  │   ├─ feature-a    ~/work/repo=feature-a [K]○ idle    [*]  │ │
 │  │   └─ feature-b    (local branch)                          │ │
 │  │ > another-repo                                       [1]   │ │
 │  │   └─ main         ~/work/another                          │ │
@@ -62,16 +62,18 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect
 
 Renders the main tree view with:
 - Repository groups (expandable/collapsible)
-- Worktree entries with status indicators
+- Worktree entries with session status indicators
 - Branch entries (local/remote)
+- Session tool icons ([C], [K], [O], [X])
 - Visual indicators for open Zellij tabs
 
 **Status Colors:**
 | Status | Color |
 |--------|-------|
-| Working | Yellow |
+| Working | Blue |
+| NeedsInput/Waiting | Yellow |
+| Success/Completed | Green |
 | Idle | Gray |
-| NeedsInput | Cyan |
 | Error | Red |
 | Disconnected | DarkGray |
 
@@ -79,7 +81,8 @@ Renders the main tree view with:
 - `>` / `v` - Collapsed/expanded group
 - `[n]` - Worktree count in group
 - `[*]` - Tab is open in Zellij
-- `(local)` / `(remote)` - Branch type
+- `[C]`/`[K]` - AI tool icon (Claude/Kiro)
+- `[L]`/`[R]` - Local/remote branch type
 
 ### status_bar.rs
 
@@ -124,10 +127,6 @@ pub enum InputDialogKind {
 }
 ```
 
-Used for:
-- Creating new worktrees (enter branch name)
-- Confirming worktree deletion (y/n)
-
 ### selection_dialog.rs
 
 ```rust
@@ -150,10 +149,6 @@ pub struct SelectionContext {
 }
 ```
 
-Used for:
-- Selecting target Zellij session
-- Selecting layout for new tab
-
 ## Rendering Flow
 
 ```
@@ -164,6 +159,9 @@ render(frame, state)
     │       ├── workspace_list::render(chunks[0])
     │       │       │
     │       │       └── Table with TreeItems
+    │       │           ├── RepoGroup rows
+    │       │           ├── Worktree rows (with session status)
+    │       │           └── Branch rows (local/remote)
     │       │
     │       └── status_bar::render(chunks[1])
     │               │
@@ -190,4 +188,5 @@ pub fn render(frame: &mut Frame, state: &AppState);
 ## Related Modules
 
 - [app](app.md) - Provides AppState for rendering
+- [workspace](workspace.md) - Session/AiTool types for status display
 - Uses ratatui widgets: Table, Paragraph, Block, Clear

@@ -1,11 +1,11 @@
 # App Module Codemap
 
-**Last Updated:** 2025-01-26
+**Last Updated:** 2026-01-30
 **Location:** `src/app/`
 
 ## Overview
 
-The app module contains the core application state, configuration, and event handling logic.
+The app module contains the core application state, configuration, and event handling logic. Manages workspaces, sessions, tree view state, and user actions.
 
 ## Structure
 
@@ -26,14 +26,18 @@ Central application state container.
 ```rust
 pub struct AppState {
     // Data
-    pub workspaces: Vec<Workspace>,      // Detected workspaces
-    pub tree_items: Vec<TreeItem>,       // Flattened tree for display
-    collapsed_repos: HashSet<String>,     // Collapsed repository groups
-    session_map: HashMap<String, usize>,  // session_id -> workspace index
-    open_tabs: HashSet<String>,           // Zellij tab names cache
+    pub workspaces: Vec<Workspace>,          // Detected workspaces
+    pub tree_items: Vec<TreeItem>,           // Flattened tree for display
+    collapsed_repos: HashSet<String>,         // Collapsed repository groups
+    pub sessions: Vec<Session>,              // Active AI CLI sessions
+    session_map: HashMap<String, usize>,      // external_id -> session index
+    sessions_by_workspace: HashMap<usize, Vec<usize>>,  // workspace -> session indices
+    open_tabs: HashSet<String>,              // Zellij tab names cache
+    pub branch_filter: Option<String>,       // Branch search filter
 
     // UI State
     pub selected_index: usize,
+    pub table_state: TableState,             // Persisted scroll state
     pub view_mode: ViewMode,
     pub list_display_mode: ListDisplayMode,
     pub input_dialog: Option<InputDialog>,
@@ -51,9 +55,34 @@ pub struct AppState {
 | `rebuild_tree_with_manager()` | Rebuild including branch information |
 | `selected_workspace()` | Get currently selected workspace |
 | `selected_branch_info()` | Get branch info if branch is selected |
+| `selected_repo_path()` | Get selected repository root path |
 | `toggle_expand()` | Expand/collapse repository group |
-| `update_open_tabs()` | Update Zellij tab cache |
-| `is_workspace_open()` | Check if workspace has open Zellij tab |
+| `set_selected_index(idx)` | Set index and sync TableState |
+
+**Session Methods:**
+| Method | Description |
+|--------|-------------|
+| `add_session(session)` | Add a session to tracking |
+| `get_session_by_external_id(id)` | Find session by external ID |
+| `get_session_by_external_id_mut(id)` | Mutable version |
+| `sessions_for_workspace(idx)` | Get sessions for workspace |
+| `remove_session(external_id)` | Mark session as disconnected |
+| `update_session_status(id, status, msg)` | Update session status |
+| `register_session(ext_id, path, tool)` | Register or update session |
+| `find_workspace_by_path(path)` | Find workspace by path |
+| `workspace_aggregate_status(idx)` | Aggregate status from all sessions |
+
+**Zellij Methods:**
+| Method | Description |
+|--------|-------------|
+| `update_open_tabs(tabs)` | Update Zellij tab cache |
+| `is_workspace_open(workspace)` | Check if workspace has open tab |
+| `select_by_tab_name(name)` | Select workspace by Zellij tab name |
+
+**Helper Function:**
+| Function | Description |
+|----------|-------------|
+| `resolve_repo_root(path)` | Resolve worktree path to repository root |
 
 ### ViewMode (state.rs)
 
@@ -84,6 +113,7 @@ pub enum TreeItem {
     RepoGroup { name, path, expanded, worktree_count },
     Worktree { workspace_index, is_last },
     Branch { name, is_local, repo_path, is_last },
+    Session { ... },  // AI CLI session display item
 }
 ```
 
@@ -123,12 +153,7 @@ pub struct ZellijConfig {
 }
 ```
 
-**Methods:**
-| Method | Description |
-|--------|-------------|
-| `generate_tab_name()` | Generate tab name from template |
-| `ensure_layout_dir()` | Create layout directory if needed |
-| `generate_builtin_layouts()` | Generate layouts from templates |
+**Methods:** `generate_tab_name()`, `ensure_layout_dir()`, `generate_builtin_layouts()`
 
 ### WorktreeConfig (config.rs)
 
@@ -137,6 +162,7 @@ pub struct WorktreeConfig {
     pub path_style: WorktreePathStyle,
     pub ghq_root: Option<PathBuf>,
     pub default_remote: String,
+    pub max_remote_branches: usize,  // Default: 100
 }
 
 pub enum WorktreePathStyle {
@@ -170,6 +196,7 @@ pub enum AppEvent {
     WorkspaceRegister { session_id, project_path, pane_id },
     WorkspaceUpdate { session_id, status, message },
     WorkspaceUnregister { session_id },
+    TabFocusChanged { tab_name },
 }
 ```
 
@@ -200,7 +227,15 @@ notify_rx.try_recv() -> AppEvent
 handle_notify_event() in main.rs
         │
         ▼
-Updates AppState.workspaces
+Updates AppState (workspaces + sessions)
+
+Session Polling (periodic)
+        │
+        ├── ClaudeSessionsFetcher.get_sessions()
+        └── KiroSqliteFetcher.get_statuses()
+        │
+        ▼
+Updates AppState.sessions
 ```
 
 ## Configuration File Format
@@ -223,10 +258,12 @@ ai_command = "claude"
 [worktree]
 path_style = "Parallel"
 default_remote = "origin"
+max_remote_branches = 100
 ```
 
 ## Related Modules
 
 - [ui](ui.md) - Renders AppState to terminal
-- [workspace](workspace.md) - Provides Workspace data
+- [workspace](workspace.md) - Provides Workspace and Session data
+- [logwatch](logwatch.md) - Provides session status updates
 - [notify](notify.md) - Sends AppEvents for status updates

@@ -1,11 +1,11 @@
 # Notify Module Codemap
 
-**Last Updated:** 2025-01-26
+**Last Updated:** 2026-01-30
 **Location:** `src/notify/`
 
 ## Overview
 
-The notify module implements a Unix Domain Socket (UDS) based notification system for receiving real-time status updates from AI CLI tools (Claude Code, Kiro-CLI, etc.).
+The notify module implements a Unix Domain Socket (UDS) based notification system for receiving real-time status updates from AI CLI tools (Claude Code, Kiro-CLI, etc.) and the Zellij tab-sync plugin.
 
 ## Structure
 
@@ -23,6 +23,7 @@ src/notify/
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum NotifyMessage {
     /// Register a new workspace session
     Register {
@@ -40,8 +41,14 @@ pub enum NotifyMessage {
     Unregister {
         session_id: String,
     },
+    /// Tab focus changed (from Zellij plugin)
+    TabFocus {
+        tab_name: String,
+    },
 }
 ```
+
+**Methods:** `session_id()` - Get identifier from any variant (returns `tab_name` for TabFocus)
 
 ## Key Functions
 
@@ -95,15 +102,15 @@ Async listener that:
 | `Status { session_id, status: "idle", .. }` | `WorkspaceUpdate { status: Idle, .. }` |
 | `Status { session_id, status: "needs_input", .. }` | `WorkspaceUpdate { status: NeedsInput, .. }` |
 | `Unregister { session_id }` | `WorkspaceUnregister { session_id }` |
+| `TabFocus { tab_name }` | `TabFocusChanged { tab_name }` |
 
 ## Data Flow
 
 ```
-AI CLI Tool                     workspace-manager TUI
+AI CLI Tool / Zellij Plugin       workspace-manager TUI
      │                                   │
      │  workspace-manager notify         │
-     │  register --session-id X          │
-     │  --project-path /path             │
+     │  register/status/tab-focus        │
      │         │                         │
      │         ▼                         │
      │  send_notification()              │
@@ -116,7 +123,7 @@ AI CLI Tool                     workspace-manager TUI
      │                                   │ Parse JSON
      │                                   │      │
      │                                   │      ▼
-     │                                   │ AppEvent::WorkspaceRegister
+     │                                   │ AppEvent
      │                                   │      │
      │                                   │      ▼
      │                                   │ tx.send(event)
@@ -127,9 +134,6 @@ AI CLI Tool                     workspace-manager TUI
      │                                   │      │
      │                                   │      ▼
      │                                   │ handle_notify_event()
-     │                                   │      │
-     │                                   │      ▼
-     │                                   │ Updates AppState
 ```
 
 ## CLI Usage
@@ -153,6 +157,9 @@ workspace-manager notify status \
 # Unregister on session end
 workspace-manager notify unregister \
     --session-id $CLAUDE_SESSION_ID
+
+# Tab focus (from Zellij plugin)
+workspace-manager notify tab-focus <tab_name>
 ```
 
 ## Integration Example
@@ -201,4 +208,5 @@ pub fn socket_path() -> PathBuf;
 ## Related Modules
 
 - [app](app.md) - Defines AppEvent variants for notifications
+- [zellij-tab-sync](zellij-tab-sync.md) - Sends TabFocus messages
 - main.rs - Spawns listener and handles events

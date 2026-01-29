@@ -1,6 +1,6 @@
 # Zellij Module Codemap
 
-**Last Updated:** 2025-01-26
+**Last Updated:** 2026-01-30
 **Location:** `src/zellij/`
 
 ## Overview
@@ -123,31 +123,17 @@ All launchers use `zellij run --cwd <path> -- <command>`.
 
 ### Session Management
 ```bash
-# List sessions
 zellij list-sessions --no-formatting
-
-# Query tab names
 zellij --session <name> action query-tab-names
-
-# Switch to tab
 zellij --session <name> action go-to-tab-name <tab>
-
-# Close current tab
 zellij --session <name> action close-tab
-
-# Create new tab
 zellij --session <name> action new-tab --name <name> --cwd <path> [--layout <file>]
 ```
 
 ### Pane Operations (Internal)
 ```bash
-# Focus pane
 zellij action focus-pane --pane-id <id>
-
-# Close pane
 zellij action close-pane --pane-id <id>
-
-# Run command in new pane
 zellij run --cwd <path> -- <command> [args...]
 ```
 
@@ -164,29 +150,6 @@ Built-in templates (generated from `layouts/*.kdl.template`):
 
 Template variable: `{{AI_COMMAND}}` replaced with configured command.
 
-## Usage Patterns
-
-### Internal Mode (Inside Zellij)
-```rust
-let zellij = ZellijActions::auto_detect(None);
-if zellij.is_internal() {
-    zellij.launch_lazygit(&workspace_path)?;
-    zellij.focus_pane(pane_id)?;
-}
-```
-
-### External Mode (Outside Zellij)
-```rust
-let zellij = ZellijActions::auto_detect(Some("main".to_string()));
-if zellij.is_available() {
-    match zellij.open_workspace_tab("repo/branch", &cwd, Some(&layout))? {
-        TabActionResult::CreatedNew(name) => println!("Created: {}", name),
-        TabActionResult::SwitchedToExisting(name) => println!("Switched: {}", name),
-        TabActionResult::SessionNotFound(s) => eprintln!("Session not found: {}", s),
-    }
-}
-```
-
 ## Exports
 
 ```rust
@@ -196,4 +159,5 @@ pub use actions::{TabActionResult, ZellijActions, ZellijMode};
 ## Related Modules
 
 - [app](app.md) - ZellijConfig configuration
+- [zellij-tab-sync](zellij-tab-sync.md) - Companion Zellij plugin for tab focus tracking
 - Layout templates in `layouts/` directory

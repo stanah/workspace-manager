@@ -1,11 +1,11 @@
 # Workspace Module Codemap
 
-**Last Updated:** 2025-01-26
+**Last Updated:** 2026-01-30
 **Location:** `src/workspace/`
 
 ## Overview
 
-The workspace module handles git repository detection, worktree scanning, and worktree lifecycle management.
+The workspace module handles git repository detection, worktree scanning, worktree lifecycle management, and AI CLI session tracking.
 
 ## Structure
 
@@ -14,7 +14,8 @@ src/workspace/
 ├── mod.rs       # Module exports
 ├── state.rs     # Workspace struct, WorkspaceStatus enum
 ├── worktree.rs  # WorktreeInfo, detection functions
-└── manager.rs   # WorktreeManager for create/delete operations
+├── manager.rs   # WorktreeManager for create/delete operations
+└── session.rs   # Session, SessionId, AiTool, SessionStatus
 ```
 
 ## Key Types
@@ -55,25 +56,100 @@ pub enum WorkspaceStatus {
 }
 ```
 
-### WorktreeInfo (worktree.rs)
+### Session (session.rs)
 
-Information about a detected git repository or worktree.
+An active AI CLI session within a workspace. Each workspace can have multiple sessions.
+
+```rust
+pub struct Session {
+    pub id: SessionId,                  // Internal UUID
+    pub external_id: String,            // "claude:{uuid}" or "kiro:{path}:{conv_id}"
+    pub workspace_index: usize,         // Parent workspace index
+    pub tool: AiTool,                   // AI tool type
+    pub status: SessionStatus,          // Current status
+    pub state_detail: Option<String>,   // Detailed state label
+    pub summary: Option<String>,        // Brief summary (max 50 chars)
+    pub current_task: Option<String>,   // Current task description
+    pub last_activity: Option<SystemTime>,
+    pub pane_id: Option<u32>,           // Zellij pane ID
+    pub tab_name: Option<String>,       // Zellij tab name
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
+}
+```
+
+**Methods:**
+| Method | Description |
+|--------|-------------|
+| `new(external_id, workspace_index, tool)` | Create new session |
+| `update_status(status, message)` | Update status and summary |
+| `update_from_logwatch_status(status)` | Update from logwatch schema |
+| `disconnect()` | Mark as disconnected |
+| `is_active()` | Check if not disconnected |
+| `display_info()` | Format display string with detail + summary + time |
+| `time_since_activity()` | Human-readable time ago |
+
+### SessionId (session.rs)
+
+```rust
+pub struct SessionId(Uuid);
+```
+
+**Methods:** `new()`, `from_uuid(uuid)`, `as_uuid()`
+
+### AiTool (session.rs)
+
+```rust
+pub enum AiTool {
+    Claude,    // Anthropic
+    Kiro,      // AWS
+    OpenCode,
+    Codex,     // OpenAI
+}
+```
+
+**Methods:** `from_str(s)`, `name()`, `icon()` ([C], [K], [O], [X]), `color()`
+
+### SessionStatus (session.rs)
+
+```rust
+pub enum SessionStatus {
+    Idle,          // Waiting for user input
+    Working,       // Actively working
+    NeedsInput,    // Waiting for confirmation
+    Success,       // Completed successfully
+    Error,         // Error state
+    Disconnected,  // Session ended
+}
+```
+
+**Methods:** `from_str(s)`, `icon()`, `color()`
+
+### External ID Functions (session.rs)
+
+| Function | Description |
+|----------|-------------|
+| `claude_external_id(session_id)` | `"claude:{uuid}"` |
+| `kiro_external_id(path, conv_id)` | `"kiro:{path}:{conv_id}"` |
+| `kiro_external_id_legacy(path)` | `"kiro:{path}"` |
+| `parse_external_id(id)` | Returns `(AiTool, raw_id)` |
+| `parse_kiro_external_id(id)` | Returns `(project_path, conv_id)` |
+
+### WorktreeInfo (worktree.rs)
 
 ```rust
 pub struct WorktreeInfo {
-    pub path: PathBuf,           // Absolute path
-    pub name: String,            // Directory name
-    pub branch: Option<String>,  // Current branch
-    pub is_worktree: bool,       // true if worktree, false if main repo
-    pub is_bare: bool,           // true if bare repository
+    pub path: PathBuf,
+    pub name: String,
+    pub branch: Option<String>,
+    pub is_worktree: bool,
+    pub is_bare: bool,
 }
 ```
 
 Implements `From<WorktreeInfo> for Workspace`.
 
 ### WorktreeListInfo (manager.rs)
-
-Detailed worktree information from `git worktree list`.
 
 ```rust
 pub struct WorktreeListInfo {
@@ -87,12 +163,8 @@ pub struct WorktreeListInfo {
 
 ### WorktreeManager (manager.rs)
 
-Handles worktree creation and deletion.
-
 ```rust
-pub struct WorktreeManager {
-    config: WorktreeConfig,
-}
+pub struct WorktreeManager { config: WorktreeConfig }
 ```
 
 **Methods:**
@@ -115,20 +187,11 @@ pub fn scan_for_repositories(root: &Path, max_depth: usize) -> Vec<WorktreeInfo>
 
 Recursively scans directory for git repositories and worktrees.
 
-**Algorithm:**
-1. Walk directories up to max_depth
-2. Check for `.git` file/directory
-3. If file: parse gitdir reference (worktree)
-4. If directory: check if bare or regular repo
-5. Extract branch from HEAD reference
-
 ### detect_worktrees
 
 ```rust
 pub fn detect_worktrees(repo_path: &Path) -> Vec<WorktreeInfo>
 ```
-
-Detects all worktrees for a given repository.
 
 ### get_default_search_paths
 
@@ -136,75 +199,22 @@ Detects all worktrees for a given repository.
 pub fn get_default_search_paths() -> Vec<PathBuf>
 ```
 
-Returns default paths to scan:
-- `~/work`
-- `~/ghq` (if GHQ_ROOT not set)
-- `$GHQ_ROOT` (if set)
+Returns: `~/work`, `~/ghq` (or `$GHQ_ROOT`)
 
 ## Worktree Path Generation
 
-The `WorktreeConfig::generate_worktree_path()` method supports multiple styles:
-
-### Parallel (default)
-```
-Parent directory: ~/work/myrepo
-New worktree:     ~/work/myrepo=feature-branch
-```
-
-### Ghq
-```
-GHQ root:     ~/ghq
-Remote URL:   git@github.com:owner/repo.git
-New worktree: ~/ghq/github.com/owner/repo=feature-branch
-```
-
-### Subdirectory
-```
-Repository:   ~/work/myrepo
-New worktree: ~/work/myrepo/.worktrees/feature-branch
-```
-
-### Custom
-User-defined template with placeholders:
-- `{repo}` - repository name
-- `{branch}` - branch name (/ replaced with -)
-- `{repo_path}` - full repository path
-
-## Data Flow
-
-```
-scan_workspaces() in AppState
-        │
-        ▼
-get_default_search_paths()
-        │
-        ▼
-scan_for_repositories(path, depth)
-        │
-        ├── Walk directories
-        ├── Detect .git file/directory
-        └── Extract WorktreeInfo
-                │
-                ▼
-        Vec<WorktreeInfo>
-                │
-                ▼
-        into() -> Vec<Workspace>
-                │
-                ▼
-        AppState.workspaces
-```
+| Style | Example |
+|-------|---------|
+| Parallel (default) | `~/work/myrepo=feature-branch` |
+| Ghq | `~/ghq/github.com/owner/repo=feature-branch` |
+| Subdirectory | `~/work/myrepo/.worktrees/feature-branch` |
+| Custom | User-defined template with `{repo}`, `{branch}`, `{repo_path}` |
 
 ## Git Operations
 
-The module uses both:
+Uses both:
 - **git2 crate** for read operations (Repository::open, branch listing)
 - **git CLI** for write operations (worktree add/remove)
-
-This hybrid approach provides:
-- Fast read access via libgit2
-- Reliable write operations via git CLI
-- Proper handling of hooks and refs
 
 ## Exports
 
@@ -212,9 +222,11 @@ This hybrid approach provides:
 pub use manager::WorktreeManager;
 pub use state::{Workspace, WorkspaceStatus};
 pub use worktree::{detect_worktrees, get_default_search_paths, scan_for_repositories, WorktreeInfo};
+pub use session::*;  // SessionId, Session, AiTool, SessionStatus, helpers
 ```
 
 ## Related Modules
 
-- [app](app.md) - Uses Workspace in AppState
+- [app](app.md) - Uses Workspace and Session in AppState
+- [logwatch](logwatch.md) - Provides SessionStatus for session updates
 - Uses git2 crate for repository operations
