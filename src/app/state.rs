@@ -3,6 +3,7 @@ use crate::workspace::{
     scan_for_repositories,
 };
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::ui::{InputDialog, SelectionContext, SelectionDialog, SelectionDialogKind};
 
@@ -845,13 +846,12 @@ impl AppState {
         false
     }
 
-    /// 選択中のリポジトリグループのパスを取得
+    /// 選択中のリポジトリのルートパスを取得
+    ///
+    /// ワークツリーが選択されている場合でも、git commondir から
+    /// 元のリポジトリルートを解決して返す。
     pub fn selected_repo_path(&self) -> Option<String> {
-        // 現在選択中のアイテムがWorktreeの場合はそのワークスペースのパスを返す
-        // RepoGroupの場合は最初のworktreeのパスを返す
-        // Branchの場合はrepo_pathを返す
-        // Sessionの場合は親ワークスペースのパスを返す
-        match self.tree_items.get(self.selected_index) {
+        let path = match self.tree_items.get(self.selected_index) {
             Some(TreeItem::Worktree { workspace_index, .. }) => self
                 .workspaces
                 .get(*workspace_index)
@@ -871,7 +871,7 @@ impl AppState {
                     if let TreeItem::Worktree { workspace_index, .. } = item {
                         if let Some(ws) = self.workspaces.get(*workspace_index) {
                             if ws.repo_name == *path {
-                                return Some(ws.project_path.clone());
+                                return Some(resolve_repo_root(&ws.project_path));
                             }
                         }
                     }
@@ -879,7 +879,8 @@ impl AppState {
                 None
             }
             None => None,
-        }
+        };
+        path.map(|p| resolve_repo_root(&p))
     }
 }
 
@@ -887,6 +888,39 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// ワークツリーパスからリポジトリルートパスを解決する
+///
+/// ワークツリーの場合、git dir 内の commondir ファイルから
+/// 元のリポジトリの .git ディレクトリを辿り、そのルートを返す。
+/// 通常のリポジトリの場合は .git の親ディレクトリを返す。
+/// 解決できない場合は元のパスをそのまま返す。
+fn resolve_repo_root(path: &str) -> String {
+    let Ok(repo) = git2::Repository::open(Path::new(path)) else {
+        return path.to_string();
+    };
+
+    let git_dir = if repo.is_worktree() {
+        // ワークツリーの場合: repo.path() は .git/worktrees/<name>/
+        // commondir ファイルに共有 .git ディレクトリへの相対パスが記載されている
+        let commondir_file = repo.path().join("commondir");
+        let Ok(content) = std::fs::read_to_string(&commondir_file) else {
+            return path.to_string();
+        };
+        repo.path().join(content.trim()).canonicalize().ok()
+    } else {
+        // 通常のリポジトリ: repo.path() は .git/
+        Some(repo.path().to_path_buf())
+    };
+
+    // .git ディレクトリの親がリポジトリルート
+    git_dir
+        .as_deref()
+        .and_then(|d| d.parent())
+        .and_then(|r| r.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// Normalize a path by expanding ~ to home directory
