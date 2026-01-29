@@ -102,6 +102,8 @@ session_name = "main"
 tab_name_template = "{repo}/{branch}"
 # AI command for layouts (claude, kiro-cli, opencode, codex)
 ai_command = "claude"
+# Command to run after tab switch (e.g., move focus to Zellij pane)
+# post_select_command = "osascript -e 'tell application \"System Events\" to keystroke \"l\" using control down'"
 
 [worktree]
 # Path style: "Parallel", "Ghq", "Subdirectory", or Custom("template")
@@ -142,6 +144,28 @@ To receive status updates from Claude Code, add hooks to `~/.claude/settings.jso
   }
 }
 ```
+
+## Auto-Focus Pane After Tab Switch (macOS)
+
+Workspace-managerとZellijを同一ウィンドウの左右ペインで運用する場合、ワークスペース選択後に自動的にZellijペインへフォーカスを移すことができます。
+
+### セットアップ
+
+1. `~/.config/workspace-manager/config.toml` に `post_select_command` を設定：
+
+```toml
+[zellij]
+post_select_command = "osascript -e 'tell application \"System Events\" to keystroke \"l\" using control down'"
+```
+
+上記の例はGhosttyの `ctrl+l=goto_split:right` キーバインドに対応しています。お使いのターミナルのペイン移動キーバインドに合わせて変更してください。
+
+2. **macOSアクセシビリティ権限**が必要です：
+   - システム設定 > プライバシーとセキュリティ > アクセシビリティ にターミナルアプリを追加
+
+### 動作の仕組み
+
+`post_select_command` はZellijタブの切り替え・作成が成功した後に `sh -c` で非同期実行されます。osascriptでSystem Eventsにキーストロークを送信し、ターミナルのペイン切り替えを発火させます。
 
 ## Zellij Tab Sync Plugin
 
