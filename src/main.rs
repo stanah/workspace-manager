@@ -781,6 +781,8 @@ fn handle_input_event(
                         }
                     }
                 }
+            } else if let Some(ref mut dialog) = state.input_dialog {
+                dialog.insert_char('y');
             }
         }
         KeyCode::Char('n') => {
