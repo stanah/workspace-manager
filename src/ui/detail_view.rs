@@ -82,7 +82,7 @@ pub fn render(frame: &mut Frame, area: Rect, workspace: &Workspace, state: &AppS
             details.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
-                    format!("{} ", session.tool.icon()),
+                    format!("{} ", session.tool.icon(state.use_nerd_font)),
                     Style::default().fg(session.tool.color()),
                 ),
                 Span::styled(

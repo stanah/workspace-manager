@@ -126,7 +126,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let tree_prefix = format!("{}{}", continuation, branch_char);
 
                 // ツールアイコンとステータス
-                let tool_icon = session.tool.icon();
+                let tool_icon = session.tool.icon(state.use_nerd_font);
                 let tool_color = session.tool.color();
                 let status_color = session.status.color();
                 let status_icon = session.status.icon();

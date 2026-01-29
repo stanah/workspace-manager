@@ -164,11 +164,18 @@ pub struct Config {
     pub editor: String,
     /// Zellij連携設定
     pub zellij: ZellijConfig,
+    /// Nerd Fontアイコンを使用するか
+    #[serde(default = "default_use_nerd_font")]
+    pub use_nerd_font: bool,
     /// Worktree設定
     pub worktree: WorktreeConfig,
     /// Log watch設定
     #[serde(default)]
     pub logwatch: LogWatchConfig,
+}
+
+fn default_use_nerd_font() -> bool {
+    true
 }
 
 fn default_editor() -> String {
@@ -185,6 +192,7 @@ impl Default for Config {
             socket_path,
             log_level: "info".to_string(),
             editor: default_editor(),
+            use_nerd_font: default_use_nerd_font(),
             zellij: ZellijConfig::default(),
             worktree: WorktreeConfig::default(),
             logwatch: LogWatchConfig::default(),

@@ -78,10 +78,16 @@ impl AiTool {
     }
 
     /// Get short icon/prefix for display
-    pub fn icon(&self) -> &'static str {
+    pub fn icon(&self, use_nerd_font: bool) -> &'static str {
         match self {
             AiTool::Claude => "✻",
-            AiTool::Kiro => "\u{F02A0}",
+            AiTool::Kiro => {
+                if use_nerd_font {
+                    "\u{F02A0}"
+                } else {
+                    "[K]"
+                }
+            }
             AiTool::OpenCode => "[O]",
             AiTool::Codex => "[X]",
         }

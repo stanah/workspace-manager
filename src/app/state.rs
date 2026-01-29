@@ -122,6 +122,8 @@ pub struct AppState {
     pub branch_filter: Option<String>,
     /// テーブルのスクロール状態（フレーム間で維持）
     pub table_state: TableState,
+    /// Nerd Fontアイコンを使用するか
+    pub use_nerd_font: bool,
 }
 
 impl AppState {
@@ -145,6 +147,7 @@ impl AppState {
             open_tabs: HashSet::new(),
             branch_filter: None,
             table_state: TableState::default(),
+            use_nerd_font: true,
         }
     }
 

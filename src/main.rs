@@ -302,6 +302,7 @@ fn run_tui() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut state = AppState::new();
+    state.use_nerd_font = config.use_nerd_font;
     let mut zellij = ZellijActions::auto_detect(config.zellij.session_name.clone());
     let worktree_manager = WorktreeManager::new(config.worktree.clone());
 
