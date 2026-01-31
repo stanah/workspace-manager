@@ -315,14 +315,14 @@ impl ClaudeSessionsFetcher {
                             }
 
                             // Convert entries to ClaudeSession
-                            // Collect all sessions and sort by modified time (newest first)
+                            // Only include active sessions (modified within inactivity threshold)
                             let mut sessions: Vec<ClaudeSession> = index.entries
                                 .iter()
                                 .filter_map(|entry| self.entry_to_session(entry, now))
+                                .filter(|s| s.is_active)
                                 .collect();
                             sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
 
-                            // Store all sessions (main.rs will filter by process count)
                             if !sessions.is_empty() {
                                 results.insert(index.original_path.clone(), sessions);
                             }
