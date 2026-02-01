@@ -241,15 +241,14 @@ impl Multiplexer for TmuxMultiplexer {
             anyhow::bail!("Failed to create window: {}", name);
         }
 
-        // ワークスペース名をユーザーオプションに保存
-        // グローバルの automatic-rename-format が @workspace-name を参照して表示する
+        // ワークスペース名をユーザーオプションに保存（ウィンドウ検索用）
         let target = format!("{}:{}", session, name);
         let _ = Command::new("tmux")
             .args(["set-window-option", "-t", &target, "@workspace-name", name])
             .status();
-        // automatic-rename を有効にしてフォーマットに任せる
+        // -n で設定した名前を維持するため automatic-rename を無効化
         let _ = Command::new("tmux")
-            .args(["set-window-option", "-t", &target, "automatic-rename", "on"])
+            .args(["set-window-option", "-t", &target, "automatic-rename", "off"])
             .status();
 
         Ok(())
