@@ -128,6 +128,7 @@ enabled = true
 session_name = "main"  # Target session for external mode
 tab_name_template = "{repo}/{branch}"
 ai_command = "claude"  # Command used in layout templates
+# post_select_command = "osascript -e '...'"  # Run after tab switch (e.g., focus pane)
 
 [worktree]
 path_style = "Parallel"  # or "Ghq", "Subdirectory", "Custom"

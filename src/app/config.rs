@@ -162,8 +162,11 @@ pub struct Config {
     /// エディタコマンド（code, cursor, vim など）
     #[serde(default = "default_editor")]
     pub editor: String,
-    /// Zellij連携設定
+    /// Zellij連携設定（後方互換）
     pub zellij: ZellijConfig,
+    /// マルチプレクサ設定（[multiplexer] が優先、未設定時は [zellij] にフォールバック）
+    #[serde(default)]
+    pub multiplexer: Option<crate::multiplexer::MultiplexerConfig>,
     /// Nerd Fontアイコンを使用するか
     #[serde(default = "default_use_nerd_font")]
     pub use_nerd_font: bool,
@@ -194,6 +197,7 @@ impl Default for Config {
             editor: default_editor(),
             use_nerd_font: default_use_nerd_font(),
             zellij: ZellijConfig::default(),
+            multiplexer: None,
             worktree: WorktreeConfig::default(),
             logwatch: LogWatchConfig::default(),
         }
@@ -370,16 +374,69 @@ impl Config {
         Ok(())
     }
 
-    /// Zellijセッション名を更新して保存
-    pub fn save_zellij_session(&mut self, session_name: String) -> Result<()> {
-        self.zellij.session_name = Some(session_name);
+    /// セッション名を更新して保存（multiplexer設定がある場合はそちらも更新）
+    pub fn save_session(&mut self, session_name: String) -> Result<()> {
+        self.zellij.session_name = Some(session_name.clone());
+        if let Some(ref mut mux) = self.multiplexer {
+            mux.session_name = Some(session_name);
+        }
         self.save()
     }
 
-    /// Zellijデフォルトレイアウトを更新して保存
-    pub fn save_zellij_layout(&mut self, layout_path: PathBuf) -> Result<()> {
-        self.zellij.default_layout = Some(layout_path);
+    /// デフォルトレイアウトを更新して保存（multiplexer設定がある場合はそちらも更新）
+    pub fn save_layout(&mut self, layout_path: PathBuf) -> Result<()> {
+        self.zellij.default_layout = Some(layout_path.clone());
+        if let Some(ref mut mux) = self.multiplexer {
+            mux.default_layout = Some(layout_path);
+        }
         self.save()
+    }
+
+    /// 後方互換エイリアス
+    pub fn save_zellij_session(&mut self, session_name: String) -> Result<()> {
+        self.save_session(session_name)
+    }
+
+    /// 後方互換エイリアス
+    pub fn save_zellij_layout(&mut self, layout_path: PathBuf) -> Result<()> {
+        self.save_layout(layout_path)
+    }
+
+    /// 有効な MultiplexerConfig を取得（[multiplexer] > [zellij] フォールバック）
+    pub fn effective_multiplexer_config(&self) -> crate::multiplexer::MultiplexerConfig {
+        match &self.multiplexer {
+            Some(mux) => mux.clone(),
+            None => crate::multiplexer::multiplexer_config_from_zellij(&self.zellij),
+        }
+    }
+
+    /// テンプレートからタブ/ウィンドウ名を生成
+    pub fn generate_tab_name(&self, repo: &str, branch: &str) -> String {
+        self.effective_multiplexer_config().generate_tab_name(repo, branch)
+    }
+
+    /// 有効なデフォルトレイアウトを取得
+    pub fn effective_default_layout(&self) -> Option<PathBuf> {
+        self.multiplexer
+            .as_ref()
+            .and_then(|m| m.default_layout.clone())
+            .or_else(|| self.zellij.default_layout.clone())
+    }
+
+    /// 有効なレイアウトディレクトリを取得
+    pub fn effective_layout_dir(&self) -> Option<PathBuf> {
+        self.multiplexer
+            .as_ref()
+            .and_then(|m| m.layout_dir.clone())
+            .or_else(|| self.zellij.layout_dir.clone())
+    }
+
+    /// 有効なpost_select_commandを取得
+    pub fn effective_post_select_command(&self) -> Option<&str> {
+        self.multiplexer
+            .as_ref()
+            .and_then(|m| m.post_select_command.as_deref())
+            .or(self.zellij.post_select_command.as_deref())
     }
 }
 
@@ -452,6 +509,7 @@ impl ZellijConfig {
             ("simple", include_str!("../../layouts/simple.kdl.template")),
             ("with-shell", include_str!("../../layouts/with-shell.kdl.template")),
             ("dev", include_str!("../../layouts/dev.kdl.template")),
+            ("shell", include_str!("../../layouts/shell.kdl.template")),
         ];
 
         for (name, template) in templates {

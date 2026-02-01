@@ -124,6 +124,8 @@ pub struct AppState {
     pub table_state: TableState,
     /// Nerd Fontアイコンを使用するか
     pub use_nerd_font: bool,
+    /// タブ名テンプレート（マッチング用）
+    pub tab_name_template: String,
 }
 
 impl AppState {
@@ -148,7 +150,15 @@ impl AppState {
             branch_filter: None,
             table_state: TableState::default(),
             use_nerd_font: true,
+            tab_name_template: "{repo}/{branch}".to_string(),
         }
+    }
+
+    /// テンプレートからタブ名を生成
+    fn generate_tab_name(&self, repo_name: &str, branch: &str) -> String {
+        self.tab_name_template
+            .replace("{repo}", repo_name)
+            .replace("{branch}", branch)
     }
 
     /// ワークスペースをスキャンして読み込み
@@ -821,16 +831,16 @@ impl AppState {
         self.open_tabs = tabs.into_iter().collect();
     }
 
-    /// ワークスペースがZellijタブとして開いているか確認
-    /// タブ名は通常 "{repo}/{branch}" 形式なので、複数パターンでマッチング
+    /// ワークスペースがタブとして開いているか確認
+    /// tab_name_template に基づいてマッチング
     pub fn is_workspace_open(&self, repo_name: &str, branch: &str) -> bool {
-        // パターン1: "{repo}/{branch}" 形式（デフォルト）
-        let pattern1 = format!("{}/{}", repo_name, branch);
+        // パターン1: テンプレートによるタブ名
+        let pattern1 = self.generate_tab_name(repo_name, branch);
         // パターン2: ブランチ名のみ
         let pattern2 = branch;
-        // パターン3: "__" 形式のrepo名の場合、ベース名で検索
+        // パターン3: "__" 形式のrepo名の場合、ベース名でテンプレート適用
         let base_repo = repo_name.split("__").next().unwrap_or(repo_name);
-        let pattern3 = format!("{}/{}", base_repo, branch);
+        let pattern3 = self.generate_tab_name(base_repo, branch);
 
         self.open_tabs.contains(&pattern1)
             || self.open_tabs.contains(pattern2)
@@ -838,16 +848,16 @@ impl AppState {
     }
 
     /// タブ名でワークスペースを選択
-    /// タブ名は "{repo}/{branch}" 形式を想定し、各ワークスペースと照合する
+    /// tab_name_template に基づいて各ワークスペースと照合する
     pub fn select_by_tab_name(&mut self, tab_name: &str) -> bool {
         for (idx, item) in self.tree_items.iter().enumerate() {
             if let TreeItem::Worktree { workspace_index, .. } = item {
                 if let Some(ws) = self.workspaces.get(*workspace_index) {
-                    // パターン1: "{repo}/{branch}" 形式
-                    let pattern1 = format!("{}/{}", ws.repo_name, ws.branch);
+                    // パターン1: テンプレートによるタブ名
+                    let pattern1 = self.generate_tab_name(&ws.repo_name, &ws.branch);
                     // パターン2: "__" 形式のrepo名のベース名
                     let base_repo = ws.repo_name.split("__").next().unwrap_or(&ws.repo_name);
-                    let pattern2 = format!("{}/{}", base_repo, ws.branch);
+                    let pattern2 = self.generate_tab_name(base_repo, &ws.branch);
 
                     if tab_name == pattern1 || tab_name == pattern2 || tab_name == ws.branch {
                         self.set_selected_index(idx);

@@ -14,12 +14,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
 use workspace_manager::logwatch::{ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
+use workspace_manager::multiplexer::{self, Multiplexer, WindowActionResult};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
 use workspace_manager::ui::input_dialog::{InputDialog, InputDialogKind};
 use workspace_manager::ui::selection_dialog::{SelectionContext, SelectionDialogKind};
 use workspace_manager::workspace::{AiTool, WorktreeManager};
-use workspace_manager::zellij::{TabActionResult, ZellijActions};
 
 /// Workspace Manager - TUI for managing Claude Code workspaces
 #[derive(Parser)]
@@ -259,9 +259,12 @@ fn run_tui() -> Result<()> {
     // 設定を先に読み込む（ファイルがなければ作成）
     let mut config = Config::load().unwrap_or_default();
 
-    // 組み込みレイアウトを生成
-    if let Err(e) = config.zellij.generate_builtin_layouts() {
-        tracing::warn!("Failed to generate layouts: {}", e);
+    // 組み込みレイアウトを生成（Zellijバックエンド時のみ）
+    let eff_config = config.effective_multiplexer_config();
+    if eff_config.backend == "zellij" || eff_config.backend == "auto" {
+        if let Err(e) = config.zellij.generate_builtin_layouts() {
+            tracing::warn!("Failed to generate layouts: {}", e);
+        }
     }
 
     // Create tokio runtime for async operations
@@ -303,13 +306,17 @@ fn run_tui() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     let mut state = AppState::new();
     state.use_nerd_font = config.use_nerd_font;
-    let mut zellij = ZellijActions::auto_detect(config.zellij.session_name.clone());
+    state.tab_name_template = config.effective_multiplexer_config().tab_name_template;
+    let mut mux = multiplexer::create_multiplexer(
+        config.multiplexer.as_ref(),
+        &config.zellij,
+    );
     let worktree_manager = WorktreeManager::new(config.worktree.clone());
 
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut zellij, &mut config, &worktree_manager, notify_rx, logwatch_trigger, workspace_watch_tx, &runtime);
+    let result = run_app(&mut terminal, &mut state, &mut *mux, &mut config, &worktree_manager, notify_rx, logwatch_trigger, workspace_watch_tx, &runtime);
 
     // Clean up socket on exit
     let socket_path = notify::socket_path();
@@ -545,7 +552,7 @@ async fn run_logwatch(
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
-    zellij: &mut ZellijActions,
+    mux: &mut dyn Multiplexer,
     config: &mut Config,
     worktree_manager: &WorktreeManager,
     mut notify_rx: tokio::sync::mpsc::Receiver<AppEvent>,
@@ -598,8 +605,8 @@ fn run_app(
         // 1秒ごとにZellijタブ状態とワークスペースリストを更新（100ms × 10回 = 1秒）
         if tick_count >= 10 {
             tick_count = 0;
-            if let Some(session) = zellij.session_name() {
-                match zellij.query_tab_names(session) {
+            if let Some(session) = mux.session_name() {
+                match mux.query_window_names(session) {
                     Ok(tabs) => {
                         tracing::debug!("Open tabs: {:?}", tabs);
                         state.update_open_tabs(tabs);
@@ -633,13 +640,13 @@ fn run_app(
                 }
                 ViewMode::Selection => {
                     if let AppEvent::Key(key) = event {
-                        handle_selection_event(state, key, zellij, config)?;
+                        handle_selection_event(state, key, mux, config)?;
                     }
                 }
                 _ => match event {
                     AppEvent::Key(key) => {
                         let action = Action::from(key);
-                        handle_action(state, zellij, config, worktree_manager, action)?;
+                        handle_action(state, mux, config, worktree_manager, action)?;
                     }
                     AppEvent::Mouse(mouse) => {
                         // header_height = 1 (border only, no header row in Table)
@@ -663,7 +670,7 @@ fn run_app(
                             }
                             other => other,
                         };
-                        handle_action(state, zellij, config, worktree_manager, action)?;
+                        handle_action(state, mux, config, worktree_manager, action)?;
                     }
                     AppEvent::Resize(_, _) => {}
                     _ => {}
@@ -681,8 +688,8 @@ fn run_app(
 
 /// タブ切り替え/作成後にpost_select_commandを実行
 fn run_post_select_command(config: &Config) {
-    if let Some(ref cmd) = config.zellij.post_select_command {
-        if let Err(e) = ZellijActions::run_post_select_command(cmd) {
+    if let Some(cmd) = config.effective_post_select_command() {
+        if let Err(e) = multiplexer::zellij::ZellijMultiplexer::run_post_select_command(cmd) {
             tracing::warn!("post_select_command failed: {}", e);
         }
     }
@@ -838,7 +845,7 @@ fn handle_input_event(
 fn handle_selection_event(
     state: &mut AppState,
     key: KeyEvent,
-    zellij: &mut ZellijActions,
+    mux: &mut dyn Multiplexer,
     config: &mut Config,
 ) -> Result<()> {
     match key.code {
@@ -860,28 +867,28 @@ fn handle_selection_event(
                 match kind {
                     SelectionDialogKind::SelectSession => {
                         // セッションを選択した場合、そのセッション名を設定してタブを開く
-                        zellij.set_session_name(selected_item.clone());
+                        mux.set_session_name(selected_item.clone());
                         // 設定ファイルに保存
-                        if let Err(e) = config.save_zellij_session(selected_item.clone()) {
+                        if let Err(e) = config.save_session(selected_item.clone()) {
                             state.status_message = Some(format!("Warning: Failed to save config: {}", e));
                         }
                         state.close_selection_dialog();
 
                         // タブを開く
-                        let tab_name = config.zellij.generate_tab_name(&ctx.repo_name, &ctx.branch_name);
+                        let tab_name = config.generate_tab_name(&ctx.repo_name, &ctx.branch_name);
                         let cwd = Path::new(&ctx.workspace_path);
-                        let layout = config.zellij.default_layout.as_deref();
+                        let layout = config.effective_default_layout();
 
-                        match zellij.open_workspace_tab(&tab_name, cwd, layout) {
-                            Ok(TabActionResult::SwitchedToExisting(name)) => {
+                        match mux.open_workspace_window(&tab_name, cwd, layout.as_deref()) {
+                            Ok(WindowActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::CreatedNew(name)) => {
+                            Ok(WindowActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {}", name));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::SessionNotFound(session)) => {
+                            Ok(WindowActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));
                             }
                             Err(e) => {
@@ -893,31 +900,31 @@ fn handle_selection_event(
                         // レイアウトを選択した場合
                         state.close_selection_dialog();
 
-                        let tab_name = config.zellij.generate_tab_name(&ctx.repo_name, &ctx.branch_name);
+                        let tab_name = config.generate_tab_name(&ctx.repo_name, &ctx.branch_name);
                         let cwd = Path::new(&ctx.workspace_path);
 
                         // レイアウトパスを構築
-                        let layout_dir = config.zellij.layout_dir.as_ref();
+                        let layout_dir = config.effective_layout_dir();
                         let layout_path = layout_dir.map(|dir| dir.join(format!("{}.kdl", selected_item)));
                         let layout = layout_path.as_deref();
 
                         // デフォルトレイアウトとして保存
                         if let Some(ref path) = layout_path {
-                            if let Err(e) = config.save_zellij_layout(path.clone()) {
+                            if let Err(e) = config.save_layout(path.clone()) {
                                 state.status_message = Some(format!("Warning: Failed to save config: {}", e));
                             }
                         }
 
-                        match zellij.open_workspace_tab(&tab_name, cwd, layout) {
-                            Ok(TabActionResult::SwitchedToExisting(name)) => {
+                        match mux.open_workspace_window(&tab_name, cwd, layout) {
+                            Ok(WindowActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::CreatedNew(name)) => {
+                            Ok(WindowActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {} (layout: {})", name, selected_item));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::SessionNotFound(session)) => {
+                            Ok(WindowActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));
                             }
                             Err(e) => {
@@ -1042,7 +1049,7 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
 
 fn handle_action(
     state: &mut AppState,
-    zellij: &mut ZellijActions,
+    mux: &mut dyn Multiplexer,
     config: &mut Config,
     _worktree_manager: &WorktreeManager,
     action: Action,
@@ -1073,9 +1080,8 @@ fn handle_action(
         }
         Action::Select => {
             if let Some(ws) = state.selected_workspace() {
-                // Zellij Internal mode: ペインにフォーカス
-                if zellij.is_internal() {
-                    // Get pane_id from session associated with this workspace
+                // Internal mode: ペインにフォーカス
+                if mux.is_internal() {
                     let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);
                     let pane_id = workspace_index.and_then(|idx| {
                         state.sessions_for_workspace(idx)
@@ -1085,49 +1091,47 @@ fn handle_action(
                     });
 
                     if let Some(pane_id) = pane_id {
-                        if let Err(e) = zellij.focus_pane(pane_id) {
+                        if let Err(e) = mux.focus_pane(pane_id) {
                             state.status_message = Some(format!("Failed to focus pane: {}", e));
                         }
                     } else {
                         state.view_mode = ViewMode::Detail;
                     }
-                } else if config.zellij.enabled {
-                    // Zellij External mode: タブを開く
+                } else if mux.is_available() {
+                    // External mode: タブ/ウィンドウを開く
                     let context = SelectionContext {
                         workspace_path: ws.project_path.clone(),
                         repo_name: ws.repo_name.clone(),
                         branch_name: ws.branch.clone(),
                     };
 
-                    // セッション名が未設定の場合はセッション選択ダイアログを表示
-                    if zellij.session_name().is_none() {
-                        match zellij.list_sessions() {
+                    if mux.session_name().is_none() {
+                        match mux.list_sessions() {
                             Ok(sessions) if !sessions.is_empty() => {
                                 state.open_session_select_dialog(sessions, context);
                             }
                             Ok(_) => {
-                                state.status_message = Some("No Zellij sessions found".to_string());
+                                state.status_message = Some("No sessions found".to_string());
                             }
                             Err(e) => {
                                 state.status_message = Some(format!("Failed to list sessions: {}", e));
                             }
                         }
                     } else {
-                        // セッション名が設定済みならタブを開く
-                        let tab_name = config.zellij.generate_tab_name(&ws.repo_name, &ws.branch);
+                        let tab_name = config.generate_tab_name(&ws.repo_name, &ws.branch);
                         let cwd = Path::new(&ws.project_path);
-                        let layout = config.zellij.default_layout.as_deref();
+                        let layout = config.effective_default_layout();
 
-                        match zellij.open_workspace_tab(&tab_name, cwd, layout) {
-                            Ok(TabActionResult::SwitchedToExisting(name)) => {
+                        match mux.open_workspace_window(&tab_name, cwd, layout.as_deref()) {
+                            Ok(WindowActionResult::SwitchedToExisting(name)) => {
                                 state.status_message = Some(format!("Switched to tab: {}", name));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::CreatedNew(name)) => {
+                            Ok(WindowActionResult::CreatedNew(name)) => {
                                 state.status_message = Some(format!("Created tab: {}", name));
                                 run_post_select_command(config);
                             }
-                            Ok(TabActionResult::SessionNotFound(session)) => {
+                            Ok(WindowActionResult::SessionNotFound(session)) => {
                                 state.status_message = Some(format!("Session '{}' not found", session));
                             }
                             Err(e) => {
@@ -1142,36 +1146,34 @@ fn handle_action(
         }
         Action::SelectWithLayout => {
             if let Some(ws) = state.selected_workspace() {
-                if config.zellij.enabled {
+                if mux.is_available() {
                     let context = SelectionContext {
                         workspace_path: ws.project_path.clone(),
                         repo_name: ws.repo_name.clone(),
                         branch_name: ws.branch.clone(),
                     };
 
-                    // まずセッション名が未設定ならセッション選択
-                    if zellij.session_name().is_none() && !zellij.is_internal() {
-                        match zellij.list_sessions() {
+                    if mux.session_name().is_none() && !mux.is_internal() {
+                        match mux.list_sessions() {
                             Ok(sessions) if !sessions.is_empty() => {
                                 state.open_session_select_dialog(sessions, context);
                             }
                             Ok(_) => {
-                                state.status_message = Some("No Zellij sessions found".to_string());
+                                state.status_message = Some("No sessions found".to_string());
                             }
                             Err(e) => {
                                 state.status_message = Some(format!("Failed to list sessions: {}", e));
                             }
                         }
                     } else {
-                        // レイアウト選択ダイアログを表示
-                        let layout_dir = config.zellij.layout_dir.clone()
+                        let layout_dir = config.effective_layout_dir()
                             .unwrap_or_else(|| {
-                                directories::ProjectDirs::from("", "", "zellij")
-                                    .map(|d| d.config_dir().join("layouts"))
-                                    .unwrap_or_else(|| Path::new("~/.config/zellij/layouts").to_path_buf())
+                                directories::BaseDirs::new()
+                                    .map(|d| d.home_dir().join(".config/workspace-manager/layouts"))
+                                    .unwrap_or_else(|| Path::new("~/.config/workspace-manager/layouts").to_path_buf())
                             });
 
-                        match zellij.list_layouts(&layout_dir) {
+                        match mux.list_layouts(&layout_dir) {
                             Ok(layouts) if !layouts.is_empty() => {
                                 state.open_layout_select_dialog(layouts, context);
                             }
@@ -1184,7 +1186,7 @@ fn handle_action(
                         }
                     }
                 } else {
-                    state.status_message = Some("Zellij integration disabled".to_string());
+                    state.status_message = Some("Multiplexer integration disabled".to_string());
                 }
             }
         }
@@ -1265,9 +1267,9 @@ fn handle_action(
         }
         Action::LaunchLazygit => {
             if let Some(ws) = state.selected_workspace() {
-                if zellij.is_available() {
+                if mux.is_available() {
                     let path = Path::new(&ws.project_path);
-                    if let Err(e) = zellij.launch_lazygit(path) {
+                    if let Err(e) = mux.launch_command(path, &["lazygit"]) {
                         state.status_message = Some(format!("Failed to launch lazygit: {}", e));
                     }
                 }
@@ -1275,9 +1277,9 @@ fn handle_action(
         }
         Action::LaunchShell => {
             if let Some(ws) = state.selected_workspace() {
-                if zellij.is_available() {
+                if mux.is_available() {
                     let path = Path::new(&ws.project_path);
-                    if let Err(e) = zellij.launch_shell(path) {
+                    if let Err(e) = mux.launch_command(path, &["zsh"]) {
                         state.status_message = Some(format!("Failed to launch shell: {}", e));
                     }
                 }
@@ -1285,9 +1287,9 @@ fn handle_action(
         }
         Action::LaunchYazi => {
             if let Some(ws) = state.selected_workspace() {
-                if zellij.is_available() {
+                if mux.is_available() {
                     let path = Path::new(&ws.project_path);
-                    if let Err(e) = zellij.launch_yazi(path) {
+                    if let Err(e) = mux.launch_command(path, &["yazi"]) {
                         state.status_message = Some(format!("Failed to launch yazi: {}", e));
                     }
                 }
@@ -1295,9 +1297,9 @@ fn handle_action(
         }
         Action::NewSession => {
             if let Some(ws) = state.selected_workspace() {
-                if zellij.is_available() {
+                if mux.is_available() {
                     let path = Path::new(&ws.project_path);
-                    if let Err(e) = zellij.launch_claude(path) {
+                    if let Err(e) = mux.launch_command(path, &["claude"]) {
                         state.status_message = Some(format!("Failed to launch Claude: {}", e));
                     }
                 }
@@ -1305,9 +1307,7 @@ fn handle_action(
         }
         Action::CloseWorkspace => {
             if let Some(ws) = state.selected_workspace() {
-                if zellij.is_internal() {
-                    // Internal mode: ペインを閉じる
-                    // Get pane_id from session associated with this workspace
+                if mux.is_internal() {
                     let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);
                     let pane_id = workspace_index.and_then(|idx| {
                         state.sessions_for_workspace(idx)
@@ -1317,15 +1317,15 @@ fn handle_action(
                     });
 
                     if let Some(pane_id) = pane_id {
-                        if let Err(e) = zellij.close_pane(pane_id) {
+                        if let Err(e) = mux.close_pane(pane_id) {
                             state.status_message = Some(format!("Failed to close pane: {}", e));
                         }
                     }
-                } else if config.zellij.enabled {
-                    // External mode: タブを閉じる
-                    if let Some(session) = zellij.session_name() {
-                        let tab_name = config.zellij.generate_tab_name(&ws.repo_name, &ws.branch);
-                        match zellij.close_tab(session, &tab_name) {
+                } else if mux.is_available() {
+                    if let Some(session) = mux.session_name() {
+                        let tab_name = config.generate_tab_name(&ws.repo_name, &ws.branch);
+                        let session = session.to_string();
+                        match mux.close_window(&session, &tab_name) {
                             Ok(()) => {
                                 state.status_message = Some(format!("Closed tab: {}", tab_name));
                             }
@@ -1334,10 +1334,10 @@ fn handle_action(
                             }
                         }
                     } else {
-                        state.status_message = Some("No Zellij session configured".to_string());
+                        state.status_message = Some("No session configured".to_string());
                     }
                 } else {
-                    state.status_message = Some("Zellij integration disabled".to_string());
+                    state.status_message = Some("Multiplexer integration disabled".to_string());
                 }
             }
         }
@@ -1348,22 +1348,18 @@ fn handle_action(
             }
         }
         Action::MouseDoubleClick(row) => {
-            // まず行を選択
             let index = row as usize;
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
             }
-            // Action::Selectと同じ処理を実行（再帰的に呼び出し）
-            handle_action(state, zellij, config, _worktree_manager, Action::Select)?;
+            handle_action(state, mux, config, _worktree_manager, Action::Select)?;
         }
         Action::MouseMiddleClick(row) => {
-            // まず行を選択
             let index = row as usize;
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
             }
-            // Action::CloseWorkspaceと同じ処理を実行（再帰的に呼び出し）
-            handle_action(state, zellij, config, _worktree_manager, Action::CloseWorkspace)?;
+            handle_action(state, mux, config, _worktree_manager, Action::CloseWorkspace)?;
         }
         Action::ScrollUp => {
             state.move_up();

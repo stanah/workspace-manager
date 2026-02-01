@@ -46,7 +46,7 @@ impl SelectionDialog {
             kind: SelectionDialogKind::SelectSession,
             items: sessions,
             selected_index: 0,
-            title: " Select Zellij Session ".to_string(),
+            title: " Select Session ".to_string(),
             context: Some(context),
         }
     }

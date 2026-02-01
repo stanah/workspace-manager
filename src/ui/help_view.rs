@@ -68,7 +68,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Zellij Actions", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("Multiplexer Actions", Style::default().add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
