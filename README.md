@@ -1,6 +1,6 @@
 # Workspace Manager
 
-TUI application for managing multiple Claude Code/Kiro-CLI workspaces with git worktree support and Zellij integration.
+TUI application for managing multiple Claude Code/Kiro-CLI workspaces with git worktree support and terminal multiplexer integration (Zellij / tmux).
 
 ## Features
 
@@ -8,9 +8,9 @@ TUI application for managing multiple Claude Code/Kiro-CLI workspaces with git w
 - **Worktree management**: Create and delete worktrees directly from the TUI
 - **Branch browsing**: View local and remote branches, create worktrees from branches
 - **Real-time status tracking**: Shows workspace status (idle, working, needs input, etc.)
-- **Zellij integration**: Two modes supported:
-  - **Internal mode**: Run inside Zellij to focus panes and launch tools
-  - **External mode**: Run outside Zellij to manage tabs in a target session
+- **Multiplexer integration**: Zellij and tmux supported:
+  - **Internal mode**: Run inside the multiplexer to focus panes and launch tools
+  - **External mode**: Run outside to manage tabs/windows in a target session
 - **Notification system**: Receives status updates from AI CLI tools via Unix Domain Socket
 
 ## Installation
@@ -58,7 +58,7 @@ workspace-manager notify unregister --session-id $SESSION_ID
 | `c` / `a` | Create new worktree (from branch or new) |
 | `d` | Delete selected worktree |
 
-### Zellij Actions
+### Multiplexer Actions
 
 | Key | Action |
 |-----|--------|
@@ -203,6 +203,36 @@ load_plugins {
   rustup target add wasm32-wasip1
   ```
 - workspace-managerリポジトリ内（またはその配下）で実行すること
+
+## tmux Tab Sync Hook
+
+tmuxでウィンドウを切り替えた際に、TUIのツリー選択を自動的に連動させるフックです。
+
+### セットアップ
+
+```bash
+workspace-manager setup-tmux-hook
+```
+
+これにより `after-select-window` グローバルフックが登録され、ウィンドウ切り替え時に `workspace-manager notify tab-focus` が発火します。
+
+### 確認・削除
+
+```bash
+# 確認
+tmux show-hooks -g | grep after-select-window
+
+# 削除
+tmux set-hook -gu after-select-window
+```
+
+### ワークスペース名のカスタマイズ
+
+デフォルトではtmuxの `window_name` がタブ名として使用されます。tmuxユーザー変数 `@workspace-name` を設定すると、そちらが優先されます：
+
+```bash
+tmux set-option -w @workspace-name "myrepo/feature-branch"
+```
 
 ## Architecture
 

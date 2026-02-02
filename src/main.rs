@@ -47,6 +47,8 @@ enum Commands {
     },
     /// Setup Zellij tab-sync plugin (build and install)
     SetupPlugin,
+    /// Setup tmux hook for tab-focus notifications
+    SetupTmuxHook,
 }
 
 #[derive(Subcommand)]
@@ -80,7 +82,7 @@ enum NotifyAction {
         #[arg(long, env = "CLAUDE_SESSION_ID")]
         session_id: String,
     },
-    /// Notify tab focus change (from Zellij plugin)
+    /// Notify tab focus change (from multiplexer plugin/hook)
     TabFocus {
         /// Tab name that received focus
         tab_name: String,
@@ -101,6 +103,7 @@ fn main() -> Result<()> {
         }
         Some(Commands::Notify { action }) => handle_notify(action),
         Some(Commands::SetupPlugin) => handle_setup_plugin(),
+        Some(Commands::SetupTmuxHook) => handle_setup_tmux_hook(),
         Some(Commands::Tui) | None => run_tui(),
     }
 }
@@ -199,6 +202,40 @@ fn handle_setup_plugin() -> Result<()> {
     eprintln!("  }}");
     eprintln!();
     eprintln!("Then restart your Zellij session to activate.");
+
+    Ok(())
+}
+
+fn handle_setup_tmux_hook() -> Result<()> {
+    use std::process::Command;
+
+    // Find the workspace-manager binary path
+    let wm_bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("workspace-manager"));
+
+    let hook_command = format!(
+        "{} notify tab-focus \"#{{?@workspace-name,#{{@workspace-name}},#{{window_name}}}}\"",
+        wm_bin.display()
+    );
+
+    let status = Command::new("tmux")
+        .args(["set-hook", "-g", "after-select-window", &format!("run-shell '{}'", hook_command)])
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to set tmux hook. Is tmux running?");
+    }
+
+    eprintln!("tmux hook registered successfully.");
+    eprintln!();
+    eprintln!("Hook command:");
+    eprintln!("  after-select-window -> {}", hook_command);
+    eprintln!();
+    eprintln!("To verify:");
+    eprintln!("  tmux show-hooks -g | grep after-select-window");
+    eprintln!();
+    eprintln!("To remove:");
+    eprintln!("  tmux set-hook -gu after-select-window");
 
     Ok(())
 }

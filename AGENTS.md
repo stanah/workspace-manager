@@ -8,7 +8,7 @@ Workspace Manager is a Rust TUI application for managing multiple Claude Code/Ki
 
 - Git worktree detection and management
 - Real-time status updates via Unix Domain Socket notifications
-- Zellij terminal multiplexer integration (internal and external modes)
+- Terminal multiplexer integration (Zellij and tmux, internal and external modes)
 - Tree-based workspace organization with branch browsing
 
 ## Key Commands
@@ -33,6 +33,9 @@ cargo test
 
 # Setup Zellij tab-sync plugin (build, install, load)
 workspace-manager setup-plugin
+
+# Setup tmux tab-focus hook
+workspace-manager setup-tmux-hook
 
 # Build plugin only (wasm32-wasip1 target required)
 cargo build -p zellij-tab-sync --target wasm32-wasip1 --release
@@ -107,8 +110,8 @@ zellij-tab-sync/          # Zellij plugin (separate crate, wasm32-wasip1)
 │  └─────────────┘    └──────┬──────┘    └─────────────┘ │
 │                            │                            │
 │  ┌─────────────┐    ┌──────▼──────┐    ┌─────────────┐ │
-│  │ workspace/  │◀───│   main.rs   │───▶│   zellij/   │ │
-│  │  (scan)     │    │ (event loop)│    │  (actions)  │ │
+│  │ workspace/  │◀───│   main.rs   │───▶│ multiplexer │ │
+│  │  (scan)     │    │ (event loop)│    │(zellij/tmux)│ │
 │  └─────────────┘    └─────────────┘    └─────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
