@@ -29,6 +29,8 @@ pub enum ListDisplayMode {
     Worktrees,
     /// worktree + 全ブランチ（ローカル＋リモート）
     WithBranches,
+    /// アクティブセッションがあるワークスペースのみ表示
+    RunningOnly,
 }
 
 impl ListDisplayMode {
@@ -36,7 +38,8 @@ impl ListDisplayMode {
     pub fn next(self) -> Self {
         match self {
             Self::Worktrees => Self::WithBranches,
-            Self::WithBranches => Self::Worktrees,
+            Self::WithBranches => Self::RunningOnly,
+            Self::RunningOnly => Self::Worktrees,
         }
     }
 
@@ -45,6 +48,7 @@ impl ListDisplayMode {
         match self {
             Self::Worktrees => "Worktrees",
             Self::WithBranches => "+Branches",
+            Self::RunningOnly => "Running",
         }
     }
 }
@@ -196,6 +200,14 @@ impl AppState {
         let mut repo_paths: HashMap<String, String> = HashMap::new(); // repo_key -> project_path
 
         for (idx, ws) in self.workspaces.iter().enumerate() {
+            // RunningOnly モードでは、アクティブセッションがないワークスペースをスキップ
+            if self.list_display_mode == ListDisplayMode::RunningOnly {
+                let sessions = self.sessions_for_workspace(idx);
+                if sessions.is_empty() {
+                    continue;
+                }
+            }
+
             // 親リポジトリのパスを推定（worktreeの場合は親ディレクトリ）
             let repo_key = self.get_repo_key(ws);
             repo_groups.entry(repo_key.clone()).or_default().push(idx);
@@ -230,7 +242,7 @@ impl AppState {
 
             // ブランチ情報を取得
             let (local_branches, remote_branches) =
-                if self.list_display_mode != ListDisplayMode::Worktrees {
+                if self.list_display_mode == ListDisplayMode::WithBranches {
                     if let Some(manager) = worktree_manager {
                         // フィルターを適用するクロージャ
                         let filter_ref = self.branch_filter.as_ref();
@@ -754,9 +766,38 @@ impl AppState {
         self.tree_items.len()
     }
 
+    /// 選択中のワークスペースのブランチ名を取得
+    pub fn selected_workspace_branch(&self) -> Option<String> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::Worktree { workspace_index, .. }) => {
+                self.workspaces.get(*workspace_index).map(|ws| ws.branch.clone())
+            }
+            Some(TreeItem::Session { session_index, .. }) => {
+                self.sessions.get(*session_index).and_then(|s| {
+                    self.workspaces.get(s.workspace_index).map(|ws| ws.branch.clone())
+                })
+            }
+            Some(TreeItem::RepoGroup { .. }) => {
+                // グループ内の最初のワークスペースのブランチを返す
+                for item in self.tree_items.iter().skip(self.selected_index + 1) {
+                    match item {
+                        TreeItem::Worktree { workspace_index, .. } => {
+                            return self.workspaces.get(*workspace_index).map(|ws| ws.branch.clone());
+                        }
+                        TreeItem::RepoGroup { .. } => break,
+                        _ => continue,
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// 新規worktree作成ダイアログを開く
     pub fn open_create_worktree_dialog(&mut self) {
-        self.input_dialog = Some(InputDialog::new_create_worktree());
+        let base_branch = self.selected_workspace_branch();
+        self.input_dialog = Some(InputDialog::new_create_worktree(base_branch));
         self.view_mode = ViewMode::Input;
     }
 

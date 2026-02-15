@@ -11,7 +11,7 @@ use super::centered_rect;
 #[derive(Debug, Clone)]
 pub enum InputDialogKind {
     /// 新規worktree作成（ブランチ名入力）
-    CreateWorktree,
+    CreateWorktree { base_branch: Option<String> },
     /// worktree削除確認
     DeleteWorktree { path: String, force: bool },
     /// ブランチフィルター
@@ -28,9 +28,9 @@ pub struct InputDialog {
 }
 
 impl InputDialog {
-    pub fn new_create_worktree() -> Self {
+    pub fn new_create_worktree(base_branch: Option<String>) -> Self {
         Self {
-            kind: InputDialogKind::CreateWorktree,
+            kind: InputDialogKind::CreateWorktree { base_branch },
             input: String::new(),
             cursor_position: 0,
             error_message: None,
@@ -107,9 +107,12 @@ pub fn render(frame: &mut Frame, area: Rect, dialog: &InputDialog) {
     frame.render_widget(Clear, popup_area);
 
     let (title, prompt, hint) = match &dialog.kind {
-        InputDialogKind::CreateWorktree => (
+        InputDialogKind::CreateWorktree { ref base_branch } => (
             " Create Worktree ".to_string(),
-            "Branch name:".to_string(),
+            match base_branch {
+                Some(branch) => format!("Branch name (from {}):", branch),
+                None => "Branch name:".to_string(),
+            },
             "Enter: create | Esc: cancel".to_string(),
         ),
         InputDialogKind::DeleteWorktree { path, force } => (

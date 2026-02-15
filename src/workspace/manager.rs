@@ -26,6 +26,7 @@ impl WorktreeManager {
         repo_path: &Path,
         branch_name: &str,
         create_branch: bool,
+        start_point: Option<&str>,
     ) -> Result<PathBuf> {
         let repo = Repository::open(repo_path)
             .context("Failed to open repository")?;
@@ -62,11 +63,11 @@ impl WorktreeManager {
 
         if create_branch && !branch_exists {
             // 新規ブランチを作成してworktreeを追加
-            // git worktree add -b <branch> <path>
-            self.run_git_worktree_add(repo_path, &worktree_path, branch_name, true)?;
+            // git worktree add -b <branch> <path> [<start-point>]
+            self.run_git_worktree_add(repo_path, &worktree_path, branch_name, true, start_point)?;
         } else if branch_exists {
             // 既存のローカルブランチでworktreeを追加
-            self.run_git_worktree_add(repo_path, &worktree_path, branch_name, false)?;
+            self.run_git_worktree_add(repo_path, &worktree_path, branch_name, false, None)?;
         } else if remote_branch_exists {
             // リモートブランチを追跡するローカルブランチを作成
             self.run_git_worktree_add_tracking(repo_path, &worktree_path, branch_name)?;
@@ -88,15 +89,19 @@ impl WorktreeManager {
         worktree_path: &Path,
         branch_name: &str,
         create_branch: bool,
+        start_point: Option<&str>,
     ) -> Result<()> {
         let mut cmd = std::process::Command::new("git");
         cmd.current_dir(repo_path);
         cmd.arg("worktree").arg("add");
 
         if create_branch {
-            // git worktree add -b <new-branch> <path>
+            // git worktree add -b <new-branch> <path> [<start-point>]
             cmd.arg("-b").arg(branch_name);
             cmd.arg(worktree_path);
+            if let Some(sp) = start_point {
+                cmd.arg(sp);
+            }
         } else {
             // git worktree add <path> <existing-branch>
             cmd.arg(worktree_path).arg(branch_name);

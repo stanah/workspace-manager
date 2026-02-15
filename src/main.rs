@@ -780,7 +780,8 @@ fn handle_input_event(
         }
         KeyCode::Enter => {
             match dialog_kind {
-                Some(InputDialogKind::CreateWorktree) => {
+                Some(InputDialogKind::CreateWorktree { ref base_branch }) => {
+                    let start_point = base_branch.clone();
                     let branch_name = dialog_input.unwrap_or_default().trim().to_string();
                     if branch_name.is_empty() {
                         if let Some(ref mut dialog) = state.input_dialog {
@@ -791,6 +792,7 @@ fn handle_input_event(
                             Path::new(rp),
                             &branch_name,
                             true,
+                            start_point.as_deref(),
                         ) {
                             Ok(path) => {
                                 state.status_message = Some(format!(
@@ -1285,6 +1287,7 @@ fn handle_action(
                     Path::new(&repo_path),
                     &branch_name,
                     false, // 既存ブランチなのでcreate_branch=false
+                    None,  // 既存ブランチなのでstart_point不要
                 ) {
                     Ok(path) => {
                         state.status_message = Some(format!(
