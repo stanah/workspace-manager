@@ -43,7 +43,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  v    ", Style::default().fg(Color::Yellow)),
-            Span::raw("  Toggle view mode (Worktrees/+Local/+All)"),
+            Span::raw("  Toggle view mode (Worktrees/+Branches/Running)"),
         ]),
         Line::from(vec![
             Span::styled("  /    ", Style::default().fg(Color::Yellow)),

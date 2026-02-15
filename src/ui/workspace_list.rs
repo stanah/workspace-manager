@@ -2,15 +2,39 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Row, Table},
+    widgets::{Block, Borders, Paragraph, Row, Table},
     Frame,
 };
 
-use crate::app::{AppState, TreeItem};
+use crate::app::{AppState, ListDisplayMode, TreeItem};
 use crate::workspace::SessionStatus;
 
 /// ワークスペース一覧をツリー形式で描画
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    // RunningOnly モードで表示するワークスペースがない場合のメッセージ
+    if state.tree_items.is_empty() && state.list_display_mode == ListDisplayMode::RunningOnly {
+        let message = Paragraph::new(Line::from(vec![
+            Span::styled(
+                "No running sessions. Press ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled("v", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                " to switch view mode.",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]))
+        .block(
+            Block::default()
+                .title(" Workspaces ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .centered();
+        frame.render_widget(message, area);
+        return;
+    }
+
     let rows: Vec<Row> = state
         .tree_items
         .iter()

@@ -2,12 +2,14 @@
 //!
 //! Reads Claude Code session information from ~/.claude/projects/*/sessions-index.json
 //! and provides session status based on file modification times.
+//! Also parses JSONL session files for rich status display (tool usage, thinking state, etc.).
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::io::{Read as _, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::debug;
 
@@ -91,6 +93,19 @@ struct SessionEntry {
     is_sidechain: bool,
 }
 
+/// State extracted from JSONL tail parsing
+#[derive(Debug, Clone, Default)]
+pub struct JsonlSessionState {
+    /// Last assistant text (for summary)
+    pub last_assistant_text: Option<String>,
+    /// Last user text input
+    pub last_user_input: Option<String>,
+    /// Last tool name used
+    pub last_tool_name: Option<String>,
+    /// Inferred state detail
+    pub state_detail: super::StatusDetail,
+}
+
 /// Claude Code session information
 #[derive(Debug, Clone)]
 pub struct ClaudeSession {
@@ -112,13 +127,64 @@ pub struct ClaudeSession {
     pub git_branch: Option<String>,
     /// Is session currently active (modified within threshold)
     pub is_active: bool,
+    /// Rich state from JSONL parsing
+    pub jsonl_state: Option<JsonlSessionState>,
 }
 
 impl ClaudeSession {
     /// Convert to SessionStatus for unified handling
     pub fn to_session_status(&self) -> super::SessionStatus {
+        // Use JSONL state if available for richer status
+        if let Some(ref jsonl) = self.jsonl_state {
+            let (status, state_detail) = if self.is_active {
+                match jsonl.state_detail {
+                    super::StatusDetail::UserInput => {
+                        (super::StatusState::Waiting, super::StatusDetail::UserInput)
+                    }
+                    ref detail => (super::StatusState::Working, detail.clone()),
+                }
+            } else {
+                (super::StatusState::Idle, super::StatusDetail::Inactive)
+            };
+
+            // Build summary from JSONL data
+            let summary = if self.is_active {
+                match jsonl.state_detail {
+                    super::StatusDetail::ExecutingTool => {
+                        jsonl.last_tool_name.as_ref().map(|t| format!("Running {}", t))
+                    }
+                    _ => jsonl
+                        .last_assistant_text
+                        .clone()
+                        .or_else(|| self.summary.clone()),
+                }
+            } else {
+                self.summary.clone()
+            };
+
+            let current_task = if self.is_active {
+                jsonl.last_user_input.clone()
+            } else {
+                None
+            };
+
+            return super::SessionStatus {
+                session_id: Some(self.session_id.clone()),
+                project_path: Some(self.project_path.clone()),
+                tool: Some("claude".to_string()),
+                status,
+                state_detail,
+                summary,
+                current_task,
+                last_activity: Some(self.modified),
+                progress: None,
+                error: None,
+                context: None,
+            };
+        }
+
+        // Fallback: no JSONL data available
         let status = if self.is_active {
-            // If modified recently, assume working
             super::StatusState::Working
         } else {
             super::StatusState::Idle
@@ -130,8 +196,6 @@ impl ClaudeSession {
             super::StatusDetail::Inactive
         };
 
-        let modified_chrono = self.modified;
-
         super::SessionStatus {
             session_id: Some(self.session_id.clone()),
             project_path: Some(self.project_path.clone()),
@@ -140,7 +204,7 @@ impl ClaudeSession {
             state_detail,
             summary: self.summary.clone(),
             current_task: None,
-            last_activity: Some(modified_chrono),
+            last_activity: Some(self.modified),
             progress: None,
             error: None,
             context: None,
@@ -189,6 +253,194 @@ pub fn filter_subagents(processes: Vec<ClaudeProcessInfo>) -> Vec<ClaudeProcessI
             true
         })
         .collect()
+}
+
+/// Maximum bytes to read from the tail of a JSONL file
+const JSONL_TAIL_MAX_BYTES: u64 = 32768;
+
+/// Parse the tail of a JSONL session file to extract rich status information.
+///
+/// Reads up to `max_bytes` from the end of the file, splits into JSON lines,
+/// and walks backward to find the latest assistant/user entries.
+fn parse_jsonl_tail(path: &Path, max_bytes: u64) -> Option<JsonlSessionState> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+
+    // Read tail bytes
+    let read_start = file_len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(read_start)).ok()?;
+
+    let mut buf = Vec::with_capacity((file_len - read_start) as usize);
+    file.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+
+    // Split into lines, skip first partial line if we seeked into the middle
+    let lines: Vec<&str> = text.lines().collect();
+    let start_idx = if read_start > 0 { 1 } else { 0 };
+
+    let mut last_assistant_text: Option<String> = None;
+    let mut last_user_input: Option<String> = None;
+    let mut last_tool_name: Option<String> = None;
+    let mut last_entry_type: Option<String> = None;
+    let mut last_content_kind: Option<String> = None; // "tool_use", "text", "thinking"
+
+    // Walk lines backward to find relevant entries
+    for line in lines[start_idx..].iter().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match entry_type {
+            "assistant" => {
+                let content = value
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array());
+
+                if let Some(items) = content {
+                    for item in items.iter().rev() {
+                        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        match item_type {
+                            "tool_use" => {
+                                if last_tool_name.is_none() {
+                                    last_tool_name = item
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                }
+                                if last_content_kind.is_none() {
+                                    last_content_kind = Some("tool_use".to_string());
+                                    last_entry_type = Some("assistant".to_string());
+                                }
+                            }
+                            "text" => {
+                                if last_assistant_text.is_none() {
+                                    let text = item
+                                        .get("text")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let trimmed = text.trim();
+                                    if !trimmed.is_empty() {
+                                        last_assistant_text =
+                                            Some(truncate_text(trimmed, 50));
+                                    }
+                                }
+                                if last_content_kind.is_none() {
+                                    last_content_kind = Some("text".to_string());
+                                    last_entry_type = Some("assistant".to_string());
+                                }
+                            }
+                            "thinking" => {
+                                if last_content_kind.is_none() {
+                                    last_content_kind = Some("thinking".to_string());
+                                    last_entry_type = Some("assistant".to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "user" => {
+                let content = value
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array());
+
+                if let Some(items) = content {
+                    for item in items {
+                        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        if item_type == "text" && last_user_input.is_none() {
+                            let text = item
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let trimmed = text.trim();
+                            // Skip internal messages
+                            if !trimmed.is_empty()
+                                && !trimmed.starts_with("[Request interrupted")
+                            {
+                                last_user_input = Some(truncate_text(trimmed, 80));
+                            }
+                        }
+                    }
+                }
+
+                if last_content_kind.is_none() {
+                    // Check if user entry is a tool_result (assistant called a tool)
+                    let has_tool_result = content.map_or(false, |items| {
+                        items
+                            .iter()
+                            .any(|i| i.get("type").and_then(|v| v.as_str()) == Some("tool_result"))
+                    });
+                    if has_tool_result {
+                        // The most recent entry is a tool_result from user,
+                        // meaning the assistant is processing the tool result (thinking)
+                        last_content_kind = Some("tool_result".to_string());
+                        last_entry_type = Some("user".to_string());
+                    } else {
+                        last_content_kind = Some("user_text".to_string());
+                        last_entry_type = Some("user".to_string());
+                    }
+                }
+            }
+            _ => continue,
+        }
+
+        // Stop once we have all the info we need
+        if last_assistant_text.is_some()
+            && last_user_input.is_some()
+            && last_tool_name.is_some()
+            && last_entry_type.is_some()
+        {
+            break;
+        }
+    }
+
+    // Determine state_detail from the most recent entry
+    let state_detail = match (
+        last_entry_type.as_deref(),
+        last_content_kind.as_deref(),
+    ) {
+        // Assistant is calling a tool
+        (Some("assistant"), Some("tool_use")) => super::StatusDetail::ExecutingTool,
+        // Assistant is writing text (thinking/responding)
+        (Some("assistant"), Some("text")) => super::StatusDetail::Thinking,
+        // Assistant is in extended thinking
+        (Some("assistant"), Some("thinking")) => super::StatusDetail::Thinking,
+        // User provided tool result → assistant is processing it
+        (Some("user"), Some("tool_result")) => super::StatusDetail::Thinking,
+        // User typed text → waiting for assistant (or assistant will start)
+        (Some("user"), Some("user_text")) => super::StatusDetail::Thinking,
+        // Default
+        _ => super::StatusDetail::Inactive,
+    };
+
+    Some(JsonlSessionState {
+        last_assistant_text,
+        last_user_input,
+        last_tool_name,
+        state_detail,
+    })
+}
+
+/// Truncate text to max characters, appending "..." if truncated
+fn truncate_text(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count > max_chars {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    } else {
+        s.to_string()
+    }
 }
 
 /// Fetches Claude Code sessions from sessions-index.json files
@@ -407,10 +659,28 @@ impl ClaudeSessionsFetcher {
                         .map(|d| d.as_secs() < self.config.inactivity_threshold_secs)
                         .unwrap_or(false);
 
+                    // Parse JSONL tail for active sessions to get rich status
+                    let jsonl_state = if is_active {
+                        let state = parse_jsonl_tail(&file_path, JSONL_TAIL_MAX_BYTES);
+                        if let Some(ref s) = state {
+                            debug!(
+                                session_id = %session_id,
+                                state_detail = ?s.state_detail,
+                                last_tool = ?s.last_tool_name,
+                                last_text = ?s.last_assistant_text,
+                                "Parsed JSONL tail"
+                            );
+                        }
+                        state
+                    } else {
+                        None
+                    };
+
                     // Use metadata from index if available, otherwise create minimal entry
                     if let Some(mut indexed) = index_sessions.remove(&session_id) {
                         // Update is_active based on actual file mtime (more reliable)
                         indexed.is_active = is_active;
+                        indexed.jsonl_state = jsonl_state;
                         sessions.push(indexed);
                     } else {
                         // Session not in index - create minimal entry from file info
@@ -426,6 +696,7 @@ impl ClaudeSessionsFetcher {
                             modified: modified_chrono,
                             git_branch: None,
                             is_active,
+                            jsonl_state,
                         });
                     }
                 }
@@ -516,6 +787,7 @@ impl ClaudeSessionsFetcher {
             modified,
             git_branch: entry.git_branch.clone(),
             is_active,
+            jsonl_state: None,
         })
     }
 }
@@ -680,5 +952,231 @@ mod tests {
         let filtered = filter_subagents(processes);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].pid, 100);
+    }
+
+    // --- JSONL tail parser tests ---
+
+    fn write_jsonl(lines: &[&str]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        for line in lines {
+            writeln!(f, "{}", line).unwrap();
+        }
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_tool_use() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add authentication"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will add auth."}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","id":"tool1","input":{}}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        assert_eq!(state.state_detail, super::super::StatusDetail::ExecutingTool);
+        assert_eq!(state.last_tool_name.as_deref(), Some("Bash"));
+        assert_eq!(state.last_assistant_text.as_deref(), Some("I will add auth."));
+        assert_eq!(state.last_user_input.as_deref(), Some("Add authentication"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_assistant_text() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the bug"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The bug has been fixed successfully."}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        assert_eq!(state.state_detail, super::super::StatusDetail::Thinking);
+        assert!(state.last_assistant_text.as_deref().unwrap().contains("bug has been fixed"));
+        assert_eq!(state.last_user_input.as_deref(), Some("Fix the bug"));
+        assert!(state.last_tool_name.is_none());
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_user_tool_result() {
+        // After assistant calls a tool, user sends tool_result back
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Build the project"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","id":"t1","input":{}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents"}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        // Last entry is tool_result → assistant is processing (thinking)
+        assert_eq!(state.state_detail, super::super::StatusDetail::Thinking);
+        assert_eq!(state.last_tool_name.as_deref(), Some("Read"));
+        assert_eq!(state.last_user_input.as_deref(), Some("Build the project"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_thinking_entry() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Explain this code"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me analyze..."}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        assert_eq!(state.state_detail, super::super::StatusDetail::Thinking);
+        assert_eq!(state.last_user_input.as_deref(), Some("Explain this code"));
+        // thinking entries don't populate last_assistant_text
+        assert!(state.last_assistant_text.is_none());
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_empty_file() {
+        let f = write_jsonl(&[]);
+        let state = parse_jsonl_tail(f.path(), 32768);
+        // Empty file should return Some with default Inactive state
+        assert!(state.is_some());
+        let s = state.unwrap();
+        assert_eq!(s.state_detail, super::super::StatusDetail::Inactive);
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_invalid_json() {
+        let f = write_jsonl(&[
+            "not valid json",
+            "{also invalid",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Valid line"}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        // Should skip invalid lines and parse the valid one
+        assert_eq!(state.last_assistant_text.as_deref(), Some("Valid line"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_skips_interrupted_messages() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Real user input"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on it"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        // Should skip the interrupted message and find the real user input
+        assert_eq!(state.last_user_input.as_deref(), Some("Real user input"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_progress_entries_ignored() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Do something"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Grep","id":"t1","input":{}}]}}"#,
+            r#"{"type":"progress","data":{"type":"hook_progress","hookEvent":"PreToolUse"}}"#,
+        ]);
+        let state = parse_jsonl_tail(f.path(), 32768).unwrap();
+        // Progress entries should be skipped; last meaningful entry is tool_use
+        assert_eq!(state.state_detail, super::super::StatusDetail::ExecutingTool);
+        assert_eq!(state.last_tool_name.as_deref(), Some("Grep"));
+    }
+
+    #[test]
+    fn test_parse_jsonl_tail_nonexistent_file() {
+        let result = parse_jsonl_tail(Path::new("/nonexistent/path.jsonl"), 32768);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_truncate_text() {
+        assert_eq!(truncate_text("short", 50), "short");
+        let long = "a".repeat(60);
+        let truncated = truncate_text(&long, 50);
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.chars().count() <= 50);
+    }
+
+    #[test]
+    fn test_to_session_status_with_jsonl_tool_use() {
+        let session = ClaudeSession {
+            session_id: "test-id".to_string(),
+            external_id: "claude:test-id".to_string(),
+            project_path: "/test".to_string(),
+            summary: Some("Index summary".to_string()),
+            message_count: 5,
+            created: Utc::now(),
+            modified: Utc::now(),
+            git_branch: None,
+            is_active: true,
+            jsonl_state: Some(JsonlSessionState {
+                last_assistant_text: Some("Working on auth".to_string()),
+                last_user_input: Some("Add login".to_string()),
+                last_tool_name: Some("Bash".to_string()),
+                state_detail: super::super::StatusDetail::ExecutingTool,
+            }),
+        };
+        let status = session.to_session_status();
+        assert_eq!(status.state_detail, super::super::StatusDetail::ExecutingTool);
+        assert_eq!(status.summary.as_deref(), Some("Running Bash"));
+        assert_eq!(status.current_task.as_deref(), Some("Add login"));
+        assert_eq!(status.status, super::super::StatusState::Working);
+    }
+
+    #[test]
+    fn test_to_session_status_with_jsonl_thinking() {
+        let session = ClaudeSession {
+            session_id: "test-id".to_string(),
+            external_id: "claude:test-id".to_string(),
+            project_path: "/test".to_string(),
+            summary: Some("Index summary".to_string()),
+            message_count: 5,
+            created: Utc::now(),
+            modified: Utc::now(),
+            git_branch: None,
+            is_active: true,
+            jsonl_state: Some(JsonlSessionState {
+                last_assistant_text: Some("Adding authentication module".to_string()),
+                last_user_input: Some("Add auth".to_string()),
+                last_tool_name: None,
+                state_detail: super::super::StatusDetail::Thinking,
+            }),
+        };
+        let status = session.to_session_status();
+        assert_eq!(status.state_detail, super::super::StatusDetail::Thinking);
+        assert_eq!(status.summary.as_deref(), Some("Adding authentication module"));
+        assert_eq!(status.status, super::super::StatusState::Working);
+    }
+
+    #[test]
+    fn test_to_session_status_inactive_ignores_jsonl() {
+        let session = ClaudeSession {
+            session_id: "test-id".to_string(),
+            external_id: "claude:test-id".to_string(),
+            project_path: "/test".to_string(),
+            summary: Some("Index summary".to_string()),
+            message_count: 5,
+            created: Utc::now(),
+            modified: Utc::now(),
+            git_branch: None,
+            is_active: false,
+            jsonl_state: Some(JsonlSessionState {
+                last_assistant_text: Some("Old text".to_string()),
+                last_user_input: None,
+                last_tool_name: None,
+                state_detail: super::super::StatusDetail::Thinking,
+            }),
+        };
+        let status = session.to_session_status();
+        // Inactive session should use Inactive state regardless of JSONL
+        assert_eq!(status.state_detail, super::super::StatusDetail::Inactive);
+        assert_eq!(status.status, super::super::StatusState::Idle);
+        assert_eq!(status.summary.as_deref(), Some("Index summary"));
+    }
+
+    #[test]
+    fn test_to_session_status_without_jsonl() {
+        let session = ClaudeSession {
+            session_id: "test-id".to_string(),
+            external_id: "claude:test-id".to_string(),
+            project_path: "/test".to_string(),
+            summary: Some("Fallback summary".to_string()),
+            message_count: 5,
+            created: Utc::now(),
+            modified: Utc::now(),
+            git_branch: None,
+            is_active: true,
+            jsonl_state: None,
+        };
+        let status = session.to_session_status();
+        // Without JSONL data, should fall back to Thinking
+        assert_eq!(status.state_detail, super::super::StatusDetail::Thinking);
+        assert_eq!(status.summary.as_deref(), Some("Fallback summary"));
     }
 }
