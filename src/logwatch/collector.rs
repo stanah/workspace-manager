@@ -411,7 +411,7 @@ fn extract_project_path(encoded: &str) -> String {
 
 /// Encode a path to Claude Code's directory name format
 /// e.g., "/Users/stanah/work/github.com/project" -> "-Users-stanah-work-github-com-project"
-fn encode_project_path(path: &str) -> String {
+pub(crate) fn encode_project_path(path: &str) -> String {
     // Expand ~ to home directory first
     let expanded = if path.starts_with("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -423,10 +423,12 @@ fn encode_project_path(path: &str) -> String {
         path.to_string()
     };
 
-    // Replace / and . with -
+    // Replace /, ., _, = with - (matching Claude Code's directory encoding)
     expanded
         .replace('/', "-")
         .replace('.', "-")
+        .replace('_', "-")
+        .replace('=', "-")
         .trim_end_matches('-')
         .to_string()
 }
@@ -462,6 +464,16 @@ mod tests {
         assert_eq!(
             encode_project_path("/Users/stanah/work/project"),
             "-Users-stanah-work-project"
+        );
+        // Underscores are replaced with hyphens
+        assert_eq!(
+            encode_project_path("/Users/stanah/work/github.com/stanah/zellij-agent-orchestrator__sandbox"),
+            "-Users-stanah-work-github-com-stanah-zellij-agent-orchestrator--sandbox"
+        );
+        // Equals signs are replaced with hyphens
+        assert_eq!(
+            encode_project_path("/Users/stanah/work/github.com/stanah/config=test"),
+            "-Users-stanah-work-github-com-stanah-config-test"
         );
     }
 

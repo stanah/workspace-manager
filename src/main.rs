@@ -13,7 +13,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
-use workspace_manager::logwatch::{ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
+use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
 use workspace_manager::multiplexer::{self, Multiplexer, WindowActionResult};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
@@ -436,45 +436,68 @@ async fn run_logwatch(
                 for (path, sessions) in &sessions_by_path {
                     let normalized_path = normalize_path_for_comparison(path);
 
-                    // Get running session IDs for this workspace
-                    let running_session_ids: Vec<&str> = running_processes.iter()
+                    // Get workspace processes (already subagent-filtered)
+                    let workspace_processes: Vec<&ClaudeProcessInfo> = running_processes.iter()
                         .filter(|p| p.cwd == normalized_path)
+                        .collect();
+
+                    // Unique session IDs from running processes
+                    let unique_session_ids: std::collections::HashSet<&str> = workspace_processes.iter()
                         .filter_map(|p| p.session_id.as_deref())
                         .collect();
 
-                    // Also get process count (some may not have --resume)
-                    let total_process_count = running_processes.iter()
-                        .filter(|p| p.cwd == normalized_path)
-                        .count();
+                    // Count processes without session ID (cap at 1 - unlikely to have multiple new sessions simultaneously)
+                    let processes_without_id = workspace_processes.iter()
+                        .filter(|p| p.session_id.is_none())
+                        .count()
+                        .min(1);
 
-                    if total_process_count == 0 {
+                    let effective_session_count = unique_session_ids.len() + processes_without_id;
+
+                    tracing::debug!(
+                        "Claude session matching for {}: total_processes={}, unique_ids={}, without_id={}, effective={}",
+                        normalized_path,
+                        workspace_processes.len(),
+                        unique_session_ids.len(),
+                        processes_without_id,
+                        effective_session_count,
+                    );
+
+                    if effective_session_count == 0 {
                         continue;
                     }
 
-                    // Match sessions: prefer exact session ID match, fallback to newest
-                    let mut matched_count = 0;
+                    // Two-pass matching: first exact ID matches, then fill remaining slots with newest
+                    let mut id_matched: Vec<&ClaudeSession> = Vec::new();
+                    let mut unmatched: Vec<&ClaudeSession> = Vec::new();
+
                     for session in sessions {
-                        // Check if this session's ID matches a running process
-                        let is_running = running_session_ids.iter()
-                            .any(|&sid| session.session_id == sid);
+                        if unique_session_ids.contains(session.session_id.as_str()) {
+                            id_matched.push(session);
+                        } else {
+                            unmatched.push(session);
+                        }
+                    }
 
-                        // Or if we haven't matched enough sessions yet (fallback for new sessions without --resume)
-                        let should_include = is_running ||
-                            (matched_count < total_process_count && running_session_ids.len() < total_process_count);
+                    // Fill remaining slots (for processes without --resume) with newest unmatched sessions
+                    let remaining_slots = effective_session_count.saturating_sub(id_matched.len());
+                    let fallback_sessions = unmatched.into_iter().take(remaining_slots);
 
-                        if should_include && matched_count < total_process_count {
-                            matched_count += 1;
-                            current_active_sessions.insert(session.external_id.clone());
-                            let session_status = session.to_session_status();
-                            let event = AppEvent::SessionStatusAnalyzed {
-                                external_id: session.external_id.clone(),
-                                project_path: path.clone(),
-                                status: session_status,
-                            };
-                            if poll_tx.send(event).await.is_err() {
-                                tracing::warn!("Claude poll receiver dropped");
-                                return;
-                            }
+                    for session in id_matched.into_iter().chain(fallback_sessions) {
+                        current_active_sessions.insert(session.external_id.clone());
+                        // Override status to Working since process detection confirmed it's running.
+                        // session.to_session_status() may return Idle if fileMtime in
+                        // sessions-index.json is stale, but we trust process detection.
+                        let mut session_status = session.to_session_status();
+                        session_status.status = workspace_manager::logwatch::StatusState::Working;
+                        let event = AppEvent::SessionStatusAnalyzed {
+                            external_id: session.external_id.clone(),
+                            project_path: path.clone(),
+                            status: session_status,
+                        };
+                        if poll_tx.send(event).await.is_err() {
+                            tracing::warn!("Claude poll receiver dropped");
+                            return;
                         }
                     }
                 }

@@ -6,12 +6,13 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::workspace::claude_external_id;
+use super::collector::encode_project_path;
 
 /// Default inactivity threshold in seconds
 const DEFAULT_INACTIVITY_THRESHOLD_SECS: u64 = 60;
@@ -48,6 +49,7 @@ struct SessionsIndex {
     entries: Vec<SessionEntry>,
     /// Original project path
     #[serde(rename = "originalPath")]
+    #[allow(dead_code)]
     original_path: String,
 }
 
@@ -149,8 +151,44 @@ impl ClaudeSession {
 /// Running Claude process info
 #[derive(Debug, Clone)]
 pub struct ClaudeProcessInfo {
+    pub pid: u32,
     pub cwd: String,
     pub session_id: Option<String>,
+    pub ppid: Option<u32>,
+}
+
+/// Filter out subagent processes (child claude processes spawned by parent claude processes).
+/// A process is considered a subagent if its parent PID (ppid) belongs to another claude process,
+/// or if any ancestor up to `max_depth` levels is a claude process.
+pub fn filter_subagents(processes: Vec<ClaudeProcessInfo>) -> Vec<ClaudeProcessInfo> {
+    let claude_pids: HashSet<u32> = processes.iter().map(|p| p.pid).collect();
+
+    // Build pid -> ppid map for ancestor checking
+    let pid_to_ppid: HashMap<u32, u32> = processes
+        .iter()
+        .filter_map(|p| p.ppid.map(|ppid| (p.pid, ppid)))
+        .collect();
+
+    let max_depth = 3;
+
+    processes
+        .into_iter()
+        .filter(|p| {
+            // Check if any ancestor (up to max_depth) is a claude process
+            let mut current_ppid = p.ppid;
+            for _ in 0..max_depth {
+                match current_ppid {
+                    Some(ppid) if claude_pids.contains(&ppid) => return false,
+                    Some(ppid) => {
+                        // Walk up the process tree
+                        current_ppid = pid_to_ppid.get(&ppid).copied();
+                    }
+                    None => break,
+                }
+            }
+            true
+        })
+        .collect()
 }
 
 /// Fetches Claude Code sessions from sessions-index.json files
@@ -182,11 +220,18 @@ impl ClaudeSessionsFetcher {
     }
 
     /// Get all running Claude processes with their session IDs
-    /// Returns a list of (cwd, session_id) pairs
+    /// Returns a list of ClaudeProcessInfo with pid, cwd, session_id, and ppid.
+    /// Subagent processes (child claude processes) are filtered out.
     pub fn get_running_processes(&self) -> Vec<ClaudeProcessInfo> {
+        let raw = self.get_running_processes_raw();
+        filter_subagents(raw)
+    }
+
+    /// Get raw running Claude processes without subagent filtering
+    fn get_running_processes_raw(&self) -> Vec<ClaudeProcessInfo> {
         let mut processes = Vec::new();
 
-        // Find claude processes, get their cwd and --resume argument
+        // Find claude processes, get their pid, cwd, --resume argument, and ppid
         // Only include processes with a TTY (not background/subprocess with tty=??)
         let script = r#"
             for pid in $(pgrep -x 'claude' 2>/dev/null); do
@@ -201,8 +246,9 @@ impl ClaudeSessionsFetcher {
                     args=$(ps -p $pid -o args= 2>/dev/null)
                     # Extract session ID from --resume argument
                     session_id=$(echo "$args" | grep -oE '\-\-resume [a-f0-9-]+' | awk '{print $2}')
+                    ppid=$(ps -p $pid -o ppid= 2>/dev/null | tr -d ' ')
                     if [ -n "$cwd" ]; then
-                        echo "${cwd}|${session_id}"
+                        echo "${pid}|${cwd}|${session_id}|${ppid}"
                     fi
                 fi
             done
@@ -221,14 +267,21 @@ impl ClaudeSessionsFetcher {
                     if line.is_empty() {
                         continue;
                     }
-                    let parts: Vec<&str> = line.splitn(2, '|').collect();
-                    let cwd = normalize_path(parts.first().unwrap_or(&""));
-                    let session_id = parts.get(1).and_then(|s| {
+                    let parts: Vec<&str> = line.splitn(4, '|').collect();
+                    let pid = parts.first().and_then(|s| s.parse::<u32>().ok());
+                    let cwd = normalize_path(parts.get(1).unwrap_or(&""));
+                    let session_id = parts.get(2).and_then(|s| {
                         let s = s.trim();
                         if s.is_empty() { None } else { Some(s.to_string()) }
                     });
-                    if !cwd.is_empty() {
-                        processes.push(ClaudeProcessInfo { cwd, session_id });
+                    let ppid = parts.get(3).and_then(|s| {
+                        let s = s.trim();
+                        if s.is_empty() { None } else { s.parse::<u32>().ok() }
+                    });
+                    if let Some(pid) = pid {
+                        if !cwd.is_empty() {
+                            processes.push(ClaudeProcessInfo { pid, cwd, session_id, ppid });
+                        }
                     }
                 }
             }
@@ -277,6 +330,11 @@ impl ClaudeSessionsFetcher {
 
     /// Get sessions for specific workspace paths
     ///
+    /// Uses a hybrid approach:
+    /// 1. Reads sessions-index.json for metadata (summary, branch, etc.)
+    /// 2. Scans JSONL files directly for recent activity (sessions-index.json may be stale)
+    /// 3. Merges both sources, preferring JSONL file scan for activity detection
+    ///
     /// Returns a map of project_path -> Vec<ClaudeSession>
     pub fn get_sessions(&self, workspace_paths: &[String]) -> HashMap<String, Vec<ClaudeSession>> {
         if !self.is_available() {
@@ -288,53 +346,96 @@ impl ClaudeSessionsFetcher {
         let mut results: HashMap<String, Vec<ClaudeSession>> = HashMap::new();
         let now = SystemTime::now();
 
-        // Read all sessions-index.json files
-        match std::fs::read_dir(&projects_dir) {
-            Ok(entries) => {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    let path = entry.path();
-                    if !path.is_dir() {
-                        continue;
-                    }
+        for workspace_path in workspace_paths {
+            let normalized_wp = normalize_path(workspace_path);
+            let encoded = encode_project_path(&normalized_wp);
+            let project_dir = projects_dir.join(&encoded);
 
-                    let index_path = path.join("sessions-index.json");
-                    if !index_path.exists() {
-                        continue;
-                    }
+            if !project_dir.is_dir() {
+                continue;
+            }
 
-                    match self.read_sessions_index(&index_path) {
-                        Ok(index) => {
-                            // Check if this project matches any workspace path
-                            let normalized_project_path = normalize_path(&index.original_path);
-                            let is_tracked = workspace_paths.iter().any(|wp| {
-                                normalize_path(wp) == normalized_project_path
-                            });
-
-                            if !is_tracked {
-                                continue;
-                            }
-
-                            // Convert entries to ClaudeSession
-                            // Only include active sessions (modified within inactivity threshold)
-                            let mut sessions: Vec<ClaudeSession> = index.entries
-                                .iter()
-                                .filter_map(|entry| self.entry_to_session(entry, now))
-                                .filter(|s| s.is_active)
-                                .collect();
-                            sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
-
-                            if !sessions.is_empty() {
-                                results.insert(index.original_path.clone(), sessions);
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Failed to read sessions index at {:?}: {}", index_path, e);
+            // Build session metadata from sessions-index.json (if available)
+            let mut index_sessions: HashMap<String, ClaudeSession> = HashMap::new();
+            let index_path = project_dir.join("sessions-index.json");
+            if index_path.exists() {
+                if let Ok(index) = self.read_sessions_index(&index_path) {
+                    for entry in &index.entries {
+                        if let Some(session) = self.entry_to_session(entry, now) {
+                            index_sessions.insert(session.session_id.clone(), session);
                         }
                     }
                 }
             }
-            Err(e) => {
-                warn!("Failed to read Claude projects directory: {}", e);
+
+            // Scan JSONL files directly for recent sessions
+            // This catches sessions not yet in sessions-index.json
+            let mut sessions: Vec<ClaudeSession> = Vec::new();
+            let mut seen_ids: HashSet<String> = HashSet::new();
+
+            if let Ok(dir_entries) = std::fs::read_dir(&project_dir) {
+                for entry in dir_entries.filter_map(|e| e.ok()) {
+                    let file_path = entry.path();
+                    // Only root-level .jsonl files (not subagent files in subdirectories)
+                    if !file_path.is_file() {
+                        continue;
+                    }
+                    let file_name = match file_path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) if name.ends_with(".jsonl") && name != "sessions-index.json" => name,
+                        _ => continue,
+                    };
+
+                    // Extract session ID from filename (UUID.jsonl)
+                    let session_id = match file_name.strip_suffix(".jsonl") {
+                        Some(id) if id.len() >= 36 => id.to_string(),
+                        _ => continue,
+                    };
+
+                    if seen_ids.contains(&session_id) {
+                        continue;
+                    }
+                    seen_ids.insert(session_id.clone());
+
+                    // Check actual file modification time
+                    let file_mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
+                        Ok(mtime) => mtime,
+                        Err(_) => continue,
+                    };
+
+                    let is_active = now
+                        .duration_since(file_mtime)
+                        .map(|d| d.as_secs() < self.config.inactivity_threshold_secs)
+                        .unwrap_or(false);
+
+                    // Use metadata from index if available, otherwise create minimal entry
+                    if let Some(mut indexed) = index_sessions.remove(&session_id) {
+                        // Update is_active based on actual file mtime (more reliable)
+                        indexed.is_active = is_active;
+                        sessions.push(indexed);
+                    } else {
+                        // Session not in index - create minimal entry from file info
+                        let modified_chrono = chrono::DateTime::<Utc>::from(file_mtime);
+                        let external_id = crate::workspace::claude_external_id(&session_id);
+                        sessions.push(ClaudeSession {
+                            session_id,
+                            external_id,
+                            project_path: normalized_wp.clone(),
+                            summary: None,
+                            message_count: 0,
+                            created: modified_chrono,
+                            modified: modified_chrono,
+                            git_branch: None,
+                            is_active,
+                        });
+                    }
+                }
+            }
+
+            // Sort by modified time (newest first)
+            sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+            if !sessions.is_empty() {
+                results.insert(normalized_wp, sessions);
             }
         }
 
@@ -509,5 +610,75 @@ mod tests {
         assert_eq!(index.version, 1);
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.original_path, "/path/to/project");
+    }
+
+    fn make_process(pid: u32, cwd: &str, session_id: Option<&str>, ppid: Option<u32>) -> ClaudeProcessInfo {
+        ClaudeProcessInfo {
+            pid,
+            cwd: cwd.to_string(),
+            session_id: session_id.map(|s| s.to_string()),
+            ppid,
+        }
+    }
+
+    #[test]
+    fn test_filter_subagents_removes_child_processes() {
+        let processes = vec![
+            make_process(100, "/work/project", Some("sess-a"), Some(1)),   // parent claude
+            make_process(200, "/work/project", Some("sess-a"), Some(100)), // subagent (child of 100)
+            make_process(300, "/work/project", Some("sess-a"), Some(200)), // nested subagent (child of 200)
+        ];
+        let filtered = filter_subagents(processes);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].pid, 100);
+    }
+
+    #[test]
+    fn test_filter_subagents_keeps_independent_processes() {
+        let processes = vec![
+            make_process(100, "/work/project-a", Some("sess-a"), Some(1)), // independent
+            make_process(200, "/work/project-b", Some("sess-b"), Some(1)), // independent
+        ];
+        let filtered = filter_subagents(processes);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_subagents_mixed_scenario() {
+        let processes = vec![
+            make_process(100, "/work/proj", Some("sess-a"), Some(1)),     // parent 1
+            make_process(200, "/work/proj", Some("sess-a"), Some(100)),   // subagent of 100
+            make_process(300, "/work/proj", Some("sess-b"), Some(1)),     // parent 2 (different session)
+            make_process(400, "/work/proj", None, Some(300)),             // subagent of 300
+        ];
+        let filtered = filter_subagents(processes);
+        assert_eq!(filtered.len(), 2);
+        let pids: Vec<u32> = filtered.iter().map(|p| p.pid).collect();
+        assert!(pids.contains(&100));
+        assert!(pids.contains(&300));
+    }
+
+    #[test]
+    fn test_filter_subagents_no_ppid() {
+        let processes = vec![
+            make_process(100, "/work/proj", Some("sess-a"), None), // no ppid info
+            make_process(200, "/work/proj", Some("sess-b"), None), // no ppid info
+        ];
+        let filtered = filter_subagents(processes);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_subagents_deep_nesting() {
+        // Ancestor check goes up to 3 levels
+        let processes = vec![
+            make_process(100, "/work/proj", Some("sess-a"), Some(1)),   // root claude
+            make_process(200, "/work/proj", None, Some(100)),            // depth 1
+            make_process(300, "/work/proj", None, Some(200)),            // depth 2
+            make_process(400, "/work/proj", None, Some(300)),            // depth 3
+        ];
+        let filtered = filter_subagents(processes);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].pid, 100);
     }
 }

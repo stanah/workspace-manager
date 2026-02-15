@@ -15,7 +15,7 @@ pub mod kiro_sqlite;
 pub mod schema;
 
 pub use analyzer::LogAnalyzer;
-pub use claude_sessions::{ClaudeSession, ClaudeSessionsConfig, ClaudeSessionsFetcher};
+pub use claude_sessions::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsConfig, ClaudeSessionsFetcher};
 pub use collector::LogCollector;
 pub use kiro_sqlite::{KiroSqliteConfig, KiroSqliteFetcher, KiroStatus};
 pub use schema::{AnalysisProgress, SessionStatus, StatusDetail, StatusState};
