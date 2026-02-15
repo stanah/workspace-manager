@@ -1402,20 +1402,20 @@ fn handle_action(
             }
         }
         Action::MouseSelect(row) => {
-            let index = row as usize;
+            let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
             }
         }
         Action::MouseDoubleClick(row) => {
-            let index = row as usize;
+            let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
             }
             handle_action(state, mux, config, _worktree_manager, Action::Select)?;
         }
         Action::MouseMiddleClick(row) => {
-            let index = row as usize;
+            let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
             }
