@@ -13,7 +13,8 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
-use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
+use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher, StatusState};
+use workspace_manager::workspace::SessionStatus;
 use workspace_manager::multiplexer::{self, Multiplexer, WindowActionResult};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
@@ -1044,6 +1045,28 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
                 );
                 // Rebuild tree to show the new session
                 state.rebuild_tree_with_manager(Some(worktree_manager));
+
+                // Try to link session to a pane by matching workspace + tool command
+                let tool_cmd = match tool {
+                    AiTool::Claude => "claude",
+                    AiTool::Kiro => "kiro",
+                    AiTool::OpenCode => "opencode",
+                    AiTool::Codex => "codex",
+                };
+                let ws_idx_for_pane = state.find_workspace_by_path(&project_path);
+                if let Some(ws_idx) = ws_idx_for_pane {
+                    for pane in &mut state.panes {
+                        if pane.workspace_index == ws_idx
+                            && pane.command == tool_cmd
+                            && pane.ai_session.as_ref().map_or(true, |ai| ai.external_id.is_none())
+                        {
+                            if let Some(ref mut ai) = pane.ai_session {
+                                ai.external_id = Some(external_id.clone());
+                            }
+                            break;
+                        }
+                    }
+                }
             } else {
                 tracing::warn!(
                     "No matching workspace found for path: {}",
@@ -1117,6 +1140,30 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
                     session.summary
                 );
             }
+
+            // Also update matching pane AI session
+            state.update_pane_ai_session_by_external_id(&external_id, |ai| {
+                ai.summary = status.display_summary();
+                ai.current_task = status.current_task.clone();
+                ai.state_detail = Some(status.state_detail.label().to_string());
+                ai.status = match status.status {
+                    StatusState::Working => SessionStatus::Working,
+                    StatusState::Waiting => SessionStatus::NeedsInput,
+                    StatusState::Completed => SessionStatus::Success,
+                    StatusState::Error => SessionStatus::Error,
+                    StatusState::Idle => SessionStatus::Idle,
+                    StatusState::Disconnected => SessionStatus::Disconnected,
+                };
+                if let Some(activity) = status.last_activity {
+                    ai.last_activity = activity
+                        .timestamp_millis()
+                        .try_into()
+                        .ok()
+                        .map(|millis: u64| {
+                            std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis)
+                        });
+                }
+            });
         }
         _ => {}
     }
