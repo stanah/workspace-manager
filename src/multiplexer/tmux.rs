@@ -121,6 +121,56 @@ impl TmuxMultiplexer {
     pub fn launch_claude(&self, cwd: &Path) -> Result<()> {
         self.launch_command(cwd, &["claude"])
     }
+
+    /// ペインの実際のフォアグラウンドコマンドを検出
+    ///
+    /// tmux の pane_current_command はシェル（zsh等）を返すことが多い。
+    /// 子プロセスツリーを走査して、AI ツール等の実際のコマンドを検出する。
+    fn detect_foreground_command(pane_pid: u32, tmux_command: &str) -> String {
+        if pane_pid == 0 {
+            return tmux_command.to_string();
+        }
+
+        // pgrep -P <pid> で子プロセスを再帰的に探索（最大3階層）
+        let mut current_pid = pane_pid;
+        for _ in 0..3 {
+            let output = Command::new("pgrep")
+                .args(["-P", &current_pid.to_string()])
+                .output();
+            let Ok(output) = output else { break };
+            if !output.status.success() {
+                break;
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let child_pids: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
+            if child_pids.is_empty() {
+                break;
+            }
+            // 最初の子プロセスのコマンド名を取得
+            let child_pid = child_pids[0];
+            let comm_output = Command::new("ps")
+                .args(["-o", "comm=", "-p", child_pid])
+                .output();
+            let Ok(comm_output) = comm_output else { break };
+            let comm = String::from_utf8_lossy(&comm_output.stdout).trim().to_string();
+            if comm.is_empty() {
+                break;
+            }
+            // AI ツールが見つかったら即座に返す
+            match comm.as_str() {
+                "claude" | "kiro" | "opencode" | "codex" => return comm,
+                _ => {}
+            }
+            // 子プロセスをさらに探索
+            if let Ok(pid) = child_pid.parse::<u32>() {
+                current_pid = pid;
+            } else {
+                break;
+            }
+        }
+
+        tmux_command.to_string()
+    }
 }
 
 impl Multiplexer for TmuxMultiplexer {
@@ -415,15 +465,19 @@ impl Multiplexer for TmuxMultiplexer {
                 if fields.len() < 8 {
                     return None;
                 }
+                let pid: u32 = fields[7].parse().unwrap_or(0);
+                // pane_current_command はシェル（zsh等）を返すことが多いため、
+                // 子プロセスツリーを走査して実際のコマンドを検出する
+                let command = Self::detect_foreground_command(pid, fields[5]);
                 Some(super::PaneInfo {
                     session_name: fields[0].to_string(),
                     window_index: fields[1].parse().unwrap_or(0),
                     window_name: fields[2].to_string(),
                     pane_id: fields[3].to_string(),
                     cwd: std::path::PathBuf::from(fields[4]),
-                    command: fields[5].to_string(),
+                    command,
                     is_active: fields[6] == "1",
-                    pid: fields[7].parse().unwrap_or(0),
+                    pid,
                 })
             })
             .collect();
