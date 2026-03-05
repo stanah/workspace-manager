@@ -961,6 +961,11 @@ impl AppState {
                     self.workspaces.get(s.workspace_index).map(|ws| ws.branch.clone())
                 })
             }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces.get(p.workspace_index).map(|ws| ws.branch.clone())
+                })
+            }
             Some(TreeItem::RepoGroup { .. }) => {
                 // グループ内の最初のワークスペースのブランチを返す
                 for item in self.tree_items.iter().skip(self.selected_index + 1) {
