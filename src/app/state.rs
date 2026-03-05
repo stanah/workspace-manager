@@ -656,7 +656,10 @@ impl AppState {
 
         for (idx, ws) in self.workspaces.iter().enumerate() {
             let ws_path = &ws.project_path;
-            if cwd_str.starts_with(ws_path) {
+            if cwd_str.starts_with(ws_path)
+                && (cwd_str.len() == ws_path.len()
+                    || cwd_str.as_bytes().get(ws_path.len()) == Some(&b'/'))
+            {
                 let len = ws_path.len();
                 if best_match.map_or(true, |(_, best_len)| len > best_len) {
                     best_match = Some((idx, len));
