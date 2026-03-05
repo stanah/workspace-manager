@@ -1154,7 +1154,31 @@ fn handle_action(
             state.rebuild_tree_with_manager(Some(_worktree_manager));
         }
         Action::Select => {
-            if let Some(ws) = state.selected_workspace() {
+            // ペインが選択されている場合: タブ切替 + ペインフォーカス
+            if let Some(pane) = state.selected_pane() {
+                if mux.is_available() && mux.backend() == multiplexer::MultiplexerBackend::Tmux {
+                    let session = pane.session_name.clone();
+                    let window_index = pane.window_index;
+                    let pane_id = pane.pane_id.clone();
+
+                    // ウィンドウ切替
+                    if let Err(e) = mux.go_to_window(&session, &window_index.to_string()) {
+                        state.status_message = Some(format!("Failed to switch window: {}", e));
+                    } else {
+                        // ペインフォーカス (pane_id is like "%12")
+                        let pane_id_num: Option<u32> = pane_id.strip_prefix('%')
+                            .and_then(|s| s.parse().ok());
+                        if let Some(id) = pane_id_num {
+                            if let Err(e) = mux.focus_pane(id) {
+                                state.status_message = Some(format!("Failed to focus pane: {}", e));
+                            } else {
+                                state.status_message = Some(format!("Focused pane {}", pane_id));
+                                run_post_select_command(config);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(ws) = state.selected_workspace() {
                 // Internal mode: ペインにフォーカス
                 if mux.is_internal() {
                     let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);
