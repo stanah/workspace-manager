@@ -167,8 +167,10 @@ impl TmuxMultiplexer {
                         // パス付きコマンド名の場合、最後のコンポーネントを取得
                         let name = comm.rsplit('/').next().unwrap_or(comm);
                         match name {
-                            "claude" | "kiro" | "opencode" | "codex" => {
-                                return Some(name.to_string());
+                            "claude" | "kiro" | "kiro-cli" | "opencode" | "codex" => {
+                                // kiro-cli を kiro に正規化
+                                let normalized = if name == "kiro-cli" { "kiro" } else { name };
+                                return Some(normalized.to_string());
                             }
                             _ => {}
                         }
