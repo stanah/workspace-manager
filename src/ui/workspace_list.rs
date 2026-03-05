@@ -89,8 +89,13 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let tree_prefix = if *is_last { "└ " } else { "├ " };
                 let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
 
-                // 集約ステータスを取得
-                let aggregate_status = state.workspace_aggregate_status(*workspace_index);
+                // 集約ステータスを取得（ペインがあればペインベース）
+                let panes = state.panes_for_workspace(*workspace_index);
+                let aggregate_status = if !panes.is_empty() {
+                    state.workspace_aggregate_status_from_panes(*workspace_index)
+                } else {
+                    state.workspace_aggregate_status(*workspace_index)
+                };
 
                 // ステータスアイコンの色はセッションのステータスを反映
                 // Disconnected状態でZellijで開いている場合は緑に
@@ -113,9 +118,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     (false, false) => Style::default(),
                 };
 
-                // セッション数を表示
+                // ペイン数またはセッション数を表示
+                let pane_count = state.panes_for_workspace(*workspace_index).len();
                 let session_count = state.sessions_for_workspace(*workspace_index).len();
-                let session_info = if session_count > 0 {
+                let child_info = if pane_count > 0 {
+                    Some(format!(" [{} pane{}]", pane_count, if pane_count > 1 { "s" } else { "" }))
+                } else if session_count > 0 {
                     Some(format!(" [{} session{}]", session_count, if session_count > 1 { "s" } else { "" }))
                 } else {
                     None
@@ -128,8 +136,8 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Span::styled(ws.branch.clone(), name_style),
                 ];
 
-                // セッション数を追加
-                if let Some(info) = session_info {
+                // セッション数/ペイン数を追加
+                if let Some(info) = child_info {
                     spans.push(Span::styled(info, Style::default().fg(Color::DarkGray)));
                 }
 
@@ -233,9 +241,62 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             ])])
             .height(1)
         }
-        TreeItem::Pane { .. } => {
-            // ペイン行（Task 6 で実装予定）
-            Row::new(vec![Line::from("    └ <pane>")]).height(1)
+        TreeItem::Pane {
+            pane_index,
+            is_last,
+            parent_is_last,
+        } => {
+            if let Some(pane) = state.panes.get(*pane_index) {
+                let continuation = if *parent_is_last { "  " } else { "│ " };
+                let branch_char = if *is_last { "└ " } else { "├ " };
+                let tree_prefix = format!("{}{}", continuation, branch_char);
+
+                if pane.is_ai_pane() {
+                    // AI ペイン: 従来の Session 表示と同じフォーマット
+                    let ai = pane.ai_session.as_ref().unwrap();
+                    let tool_icon = ai.tool.icon(state.use_nerd_font);
+                    let tool_color = ai.tool.color();
+                    let status_color = ai.status.color();
+                    let status_icon = ai.status.icon();
+                    let info = pane.display_info();
+
+                    let name_style = if is_selected {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+
+                    let spans = vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
+                        Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+                        Span::styled(info, name_style.fg(Color::DarkGray)),
+                    ];
+
+                    Row::new(vec![Line::from(spans)]).height(1)
+                } else {
+                    // 通常ペイン: コマンド名のみ、DarkGray
+                    let name_style = if is_selected {
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+
+                    let spans = vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled("  ", Style::default()),
+                        Span::styled(pane.command.clone(), name_style),
+                    ];
+
+                    Row::new(vec![Line::from(spans)]).height(1)
+                }
+            } else {
+                Row::new(vec![Line::from("    └ <invalid pane>")]).height(1)
+            }
         }
     }
 }
