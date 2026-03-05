@@ -233,5 +233,9 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             ])])
             .height(1)
         }
+        TreeItem::Pane { .. } => {
+            // ペイン行（Task 6 で実装予定）
+            Row::new(vec![Line::from("    └ <pane>")]).height(1)
+        }
     }
 }
