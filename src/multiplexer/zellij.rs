@@ -325,4 +325,21 @@ impl Multiplexer for ZellijMultiplexer {
             .context("Failed to execute zellij run")?;
         Ok(())
     }
+
+    fn new_pane(&self, session: &str, cwd: &Path) -> Result<()> {
+        let cwd_str = cwd.to_string_lossy();
+        let status = Command::new("zellij")
+            .args([
+                "--session", session,
+                "action", "new-pane",
+                "--cwd", &cwd_str,
+            ])
+            .status()
+            .context("Failed to create new pane")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to create pane in session: {}", session);
+        }
+        Ok(())
+    }
 }

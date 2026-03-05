@@ -88,6 +88,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("  New Claude Code session"),
         ]),
         Line::from(vec![
+            Span::styled("  p    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Add pane to current tab"),
+        ]),
+        Line::from(vec![
             Span::styled("  x    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Close workspace"),
         ]),

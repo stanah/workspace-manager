@@ -1368,6 +1368,47 @@ fn handle_action(
                 }
             }
         }
+        Action::AddPane => {
+            if let Some(ws) = state.selected_workspace() {
+                if mux.is_available() && !mux.is_internal() {
+                    if let Some(session) = mux.session_name() {
+                        let session = session.to_string();
+                        let cwd = Path::new(&ws.project_path);
+                        match mux.new_pane(&session, cwd) {
+                            Ok(()) => {
+                                state.status_message = Some(format!("Added pane: {}", ws.project_path));
+                                run_post_select_command(config);
+                            }
+                            Err(e) => {
+                                state.status_message = Some(format!("Failed to add pane: {}", e));
+                            }
+                        }
+                    } else {
+                        // セッション未設定: セッション選択ダイアログを開く
+                        let context = SelectionContext {
+                            workspace_path: ws.project_path.clone(),
+                            repo_name: ws.repo_name.clone(),
+                            branch_name: ws.branch.clone(),
+                        };
+                        match mux.list_sessions() {
+                            Ok(sessions) if !sessions.is_empty() => {
+                                state.open_session_select_dialog(sessions, context);
+                            }
+                            Ok(_) => {
+                                state.status_message = Some("No sessions found".to_string());
+                            }
+                            Err(e) => {
+                                state.status_message = Some(format!("Failed to list sessions: {}", e));
+                            }
+                        }
+                    }
+                } else if mux.is_internal() {
+                    state.status_message = Some("Add pane is for external mode only".to_string());
+                } else {
+                    state.status_message = Some("Multiplexer integration disabled".to_string());
+                }
+            }
+        }
         Action::CloseWorkspace => {
             if let Some(ws) = state.selected_workspace() {
                 if mux.is_internal() {

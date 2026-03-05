@@ -78,6 +78,8 @@ pub enum Action {
     NewSession,
     /// Zellij: ワークスペース終了（Internal→ペイン閉じる、External→タブ閉じる）
     CloseWorkspace,
+    /// 現在のタブにペインを追加（External mode用）
+    AddPane,
     /// 新規worktree作成
     CreateWorktree,
     /// worktree削除
@@ -145,6 +147,7 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('g'), _) => Action::LaunchShell,
             (KeyCode::Char('y'), _) => Action::LaunchYazi,
             (KeyCode::Char('n'), _) => Action::NewSession,
+            (KeyCode::Char('p'), _) => Action::AddPane,
             (KeyCode::Char('x'), _) => Action::CloseWorkspace,
             // ブランチフィルター
             (KeyCode::Char('/'), _) => Action::FilterBranches,

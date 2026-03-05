@@ -90,6 +90,9 @@ pub trait Multiplexer {
     /// 指定ディレクトリでコマンドを起動（新ペイン）
     fn launch_command(&self, cwd: &Path, command: &[&str]) -> Result<()>;
 
+    /// 現在フォーカス中のタブ/ウィンドウにペインを追加（External mode用）
+    fn new_pane(&self, session: &str, cwd: &Path) -> Result<()>;
+
     // === tmux 固有（オプショナル） ===
 
     /// ペイン/ウィンドウにキーを送信（tmux のみ）

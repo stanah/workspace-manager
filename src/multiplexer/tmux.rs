@@ -368,6 +368,23 @@ impl Multiplexer for TmuxMultiplexer {
         Ok(())
     }
 
+    fn new_pane(&self, session: &str, cwd: &Path) -> Result<()> {
+        let cwd_str = cwd.to_string_lossy();
+        let status = Command::new("tmux")
+            .args([
+                "split-window",
+                "-t", session,
+                "-c", &cwd_str,
+            ])
+            .status()
+            .context("Failed to create new pane")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to create pane in session: {}", session);
+        }
+        Ok(())
+    }
+
     fn send_keys(&self, target: &str, keys: &str) -> Result<()> {
         let status = Command::new("tmux")
             .args(["send-keys", "-t", target, keys, "Enter"])
