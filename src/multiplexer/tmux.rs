@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -122,54 +123,65 @@ impl TmuxMultiplexer {
         self.launch_command(cwd, &["claude"])
     }
 
-    /// ペインの実際のフォアグラウンドコマンドを検出
-    ///
-    /// tmux の pane_current_command はシェル（zsh等）を返すことが多い。
-    /// 子プロセスツリーを走査して、AI ツール等の実際のコマンドを検出する。
-    fn detect_foreground_command(pane_pid: u32, tmux_command: &str) -> String {
-        if pane_pid == 0 {
-            return tmux_command.to_string();
+    /// プロセステーブルを1回取得し、ppid -> [(pid, comm)] のマップを構築
+    fn build_process_tree() -> HashMap<u32, Vec<(u32, String)>> {
+        let output = Command::new("ps")
+            .args(["-eo", "pid,ppid,comm"])
+            .output();
+        let Ok(output) = output else {
+            return HashMap::new();
+        };
+        if !output.status.success() {
+            return HashMap::new();
         }
 
-        // pgrep -P <pid> で子プロセスを再帰的に探索（最大3階層）
-        let mut current_pid = pane_pid;
+        let mut tree: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().skip(1) {
+            // "  PID  PPID COMM" format
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let pid: u32 = parts[0].parse().unwrap_or(0);
+                let ppid: u32 = parts[1].parse().unwrap_or(0);
+                let comm = parts[2].to_string();
+                if pid > 0 {
+                    tree.entry(ppid).or_default().push((pid, comm));
+                }
+            }
+        }
+        tree
+    }
+
+    /// プロセスツリーから指定PIDの子孫を走査し、AIツールを検出
+    fn find_ai_command_in_tree(
+        tree: &HashMap<u32, Vec<(u32, String)>>,
+        pid: u32,
+    ) -> Option<String> {
+        // BFS で最大3階層探索
+        let mut queue = vec![pid];
         for _ in 0..3 {
-            let output = Command::new("pgrep")
-                .args(["-P", &current_pid.to_string()])
-                .output();
-            let Ok(output) = output else { break };
-            if !output.status.success() {
+            let mut next_queue = Vec::new();
+            for &current in &queue {
+                if let Some(children) = tree.get(&current) {
+                    for (child_pid, comm) in children {
+                        // パス付きコマンド名の場合、最後のコンポーネントを取得
+                        let name = comm.rsplit('/').next().unwrap_or(comm);
+                        match name {
+                            "claude" | "kiro" | "opencode" | "codex" => {
+                                return Some(name.to_string());
+                            }
+                            _ => {}
+                        }
+                        next_queue.push(*child_pid);
+                    }
+                }
+            }
+            if next_queue.is_empty() {
                 break;
             }
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let child_pids: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
-            if child_pids.is_empty() {
-                break;
-            }
-            // 最初の子プロセスのコマンド名を取得
-            let child_pid = child_pids[0];
-            let comm_output = Command::new("ps")
-                .args(["-o", "comm=", "-p", child_pid])
-                .output();
-            let Ok(comm_output) = comm_output else { break };
-            let comm = String::from_utf8_lossy(&comm_output.stdout).trim().to_string();
-            if comm.is_empty() {
-                break;
-            }
-            // AI ツールが見つかったら即座に返す
-            match comm.as_str() {
-                "claude" | "kiro" | "opencode" | "codex" => return comm,
-                _ => {}
-            }
-            // 子プロセスをさらに探索
-            if let Ok(pid) = child_pid.parse::<u32>() {
-                current_pid = pid;
-            } else {
-                break;
-            }
+            queue = next_queue;
         }
-
-        tmux_command.to_string()
+        None
     }
 }
 
@@ -457,6 +469,10 @@ impl Multiplexer for TmuxMultiplexer {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // プロセステーブルを1回だけ取得（全ペイン分のAIツール検出に使い回す）
+        let process_tree = Self::build_process_tree();
+
         let panes = stdout
             .lines()
             .filter(|line| !line.is_empty())
@@ -467,8 +483,9 @@ impl Multiplexer for TmuxMultiplexer {
                 }
                 let pid: u32 = fields[7].parse().unwrap_or(0);
                 // pane_current_command はシェル（zsh等）を返すことが多いため、
-                // 子プロセスツリーを走査して実際のコマンドを検出する
-                let command = Self::detect_foreground_command(pid, fields[5]);
+                // プロセスツリーを走査して実際のコマンドを検出する
+                let command = Self::find_ai_command_in_tree(&process_tree, pid)
+                    .unwrap_or_else(|| fields[5].to_string());
                 Some(super::PaneInfo {
                     session_name: fields[0].to_string(),
                     window_index: fields[1].parse().unwrap_or(0),
