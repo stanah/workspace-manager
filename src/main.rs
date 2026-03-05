@@ -679,6 +679,19 @@ fn run_app(
                 tracing::debug!("No session name configured");
             }
 
+            // ペイン情報をポーリング
+            match mux.list_all_panes() {
+                Ok(panes) if !panes.is_empty() => {
+                    tracing::debug!("Polled {} panes", panes.len());
+                    state.update_panes(&panes);
+                    state.rebuild_tree_with_manager(Some(worktree_manager));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!("Failed to poll panes: {}", e);
+                }
+            }
+
             // Update workspace list for Kiro SQLite polling
             if let Some(ref tx) = workspace_watch_tx {
                 let paths: Vec<String> = state.workspaces.iter().map(|w| w.project_path.clone()).collect();
