@@ -385,6 +385,52 @@ impl Multiplexer for TmuxMultiplexer {
         Ok(())
     }
 
+    fn list_all_panes(&self) -> Result<Vec<super::PaneInfo>> {
+        let session = match self.resolve_session() {
+            Ok(s) => s,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let output = Command::new("tmux")
+            .args([
+                "list-panes",
+                "-s",
+                "-t", &session,
+                "-F",
+                "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_active}\t#{pane_pid}",
+            ])
+            .output()
+            .context("Failed to list tmux panes")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let panes = stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| {
+                let fields: Vec<&str> = line.split('\t').collect();
+                if fields.len() < 8 {
+                    return None;
+                }
+                Some(super::PaneInfo {
+                    session_name: fields[0].to_string(),
+                    window_index: fields[1].parse().unwrap_or(0),
+                    window_name: fields[2].to_string(),
+                    pane_id: fields[3].to_string(),
+                    cwd: std::path::PathBuf::from(fields[4]),
+                    command: fields[5].to_string(),
+                    is_active: fields[6] == "1",
+                    pid: fields[7].parse().unwrap_or(0),
+                })
+            })
+            .collect();
+
+        Ok(panes)
+    }
+
     fn send_keys(&self, target: &str, keys: &str) -> Result<()> {
         let status = Command::new("tmux")
             .args(["send-keys", "-t", target, keys, "Enter"])
