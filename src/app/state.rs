@@ -1086,9 +1086,7 @@ impl AppState {
         for (idx, item) in self.tree_items.iter().enumerate() {
             if let TreeItem::Worktree { workspace_index, .. } = item {
                 if let Some(ws) = self.workspaces.get(*workspace_index) {
-                    // パターン1: テンプレートによるタブ名
                     let pattern1 = self.generate_tab_name(&ws.repo_name, &ws.branch);
-                    // パターン2: "__" 形式のrepo名のベース名
                     let base_repo = ws.repo_name.split("__").next().unwrap_or(&ws.repo_name);
                     let pattern2 = self.generate_tab_name(base_repo, &ws.branch);
 

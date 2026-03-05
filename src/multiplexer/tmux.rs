@@ -461,7 +461,7 @@ impl Multiplexer for TmuxMultiplexer {
                 "-s",
                 "-t", &session,
                 "-F",
-                "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_active}\t#{pane_pid}",
+                "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_active}\t#{pane_pid}\t#{window_active}",
             ])
             .output()
             .context("Failed to list tmux panes")?;
@@ -480,10 +480,12 @@ impl Multiplexer for TmuxMultiplexer {
             .filter(|line| !line.is_empty())
             .filter_map(|line| {
                 let fields: Vec<&str> = line.split('\t').collect();
-                if fields.len() < 8 {
+                if fields.len() < 9 {
                     return None;
                 }
                 let pid: u32 = fields[7].parse().unwrap_or(0);
+                let pane_active = fields[6] == "1";
+                let window_active = fields[8] == "1";
                 // pane_current_command はシェル（zsh等）を返すことが多いため、
                 // プロセスツリーを走査して実際のコマンドを検出する
                 let command = Self::find_ai_command_in_tree(&process_tree, pid)
@@ -495,7 +497,7 @@ impl Multiplexer for TmuxMultiplexer {
                     pane_id: fields[3].to_string(),
                     cwd: std::path::PathBuf::from(fields[4]),
                     command,
-                    is_active: fields[6] == "1",
+                    is_active: pane_active && window_active,
                     pid,
                 })
             })
