@@ -1094,9 +1094,6 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
         }
         AppEvent::TabFocusChanged { tab_name } => {
             tracing::info!("Tab focus changed: {}", tab_name);
-            if state.select_by_tab_name(&tab_name) {
-                state.status_message = Some(format!("Focused: {}", tab_name));
-            }
         }
         AppEvent::SessionStatusAnalyzed {
             external_id,
@@ -1551,6 +1548,10 @@ fn handle_action(
             let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
+                // ペイン行クリックでそのペインにフォーカス
+                if state.selected_pane().is_some() {
+                    handle_action(state, mux, config, _worktree_manager, Action::Select)?;
+                }
             }
         }
         Action::MouseDoubleClick(row) => {

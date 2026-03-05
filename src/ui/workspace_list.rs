@@ -234,6 +234,13 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let continuation = if *parent_is_last { "  " } else { "│ " };
                 let branch_char = if *is_last { "└ " } else { "├ " };
                 let tree_prefix = format!("{}{}", continuation, branch_char);
+                // 行頭をアクティブインジケータに使用
+                let leading = if pane.is_active {
+                    Span::styled("▶ ", Style::default().fg(Color::Green))
+                } else {
+                    Span::styled("  ", Style::default())
+                };
+
                 if pane.is_ai_pane() {
                     // AI ペイン: 従来の Session 表示と同じフォーマット
                     let ai = pane.ai_session.as_ref().unwrap();
@@ -243,39 +250,36 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     let status_icon = ai.status.icon();
                     let info = pane.display_info();
 
-                    let (name_style, active_prefix, active_suffix) = if pane.is_active {
-                        (Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
-                         "▶ ", "")
+                    let name_style = if pane.is_active {
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
                     } else if is_selected {
-                        (Style::default().add_modifier(Modifier::BOLD), "  ", "")
+                        Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        (Style::default(), "  ", "")
+                        Style::default()
                     };
 
                     let spans = vec![
-                        Span::styled("  ", Style::default()),
+                        leading,
                         Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                        Span::styled(active_prefix, Style::default().fg(Color::Green)),
                         Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                         Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
-                        Span::styled(format!("{}{}", info, active_suffix), name_style.fg(Color::DarkGray)),
+                        Span::styled(info, name_style.fg(Color::DarkGray)),
                     ];
 
                     Row::new(vec![Line::from(spans)]).height(1)
                 } else {
                     // 通常ペイン: コマンド名
-                    let (name_style, active_prefix) = if pane.is_active {
-                        (Style::default().add_modifier(Modifier::BOLD).fg(Color::White), "▶ ")
+                    let name_style = if pane.is_active {
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
                     } else if is_selected {
-                        (Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD), "  ")
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
                     } else {
-                        (Style::default().fg(Color::DarkGray), "  ")
+                        Style::default().fg(Color::DarkGray)
                     };
 
                     let spans = vec![
-                        Span::styled("  ", Style::default()),
+                        leading,
                         Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                        Span::styled(active_prefix, Style::default().fg(Color::Green)),
                         Span::styled(pane.command.clone(), name_style),
                     ];
 

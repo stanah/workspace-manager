@@ -53,7 +53,12 @@ impl Pane {
 
     pub fn display_info(&self) -> String {
         if let Some(ref ai) = self.ai_session {
+            let has_detail = ai.state_detail.is_some() || ai.summary.is_some();
             let mut parts = Vec::new();
+            if !has_detail {
+                // メッセージがない場合はツール名を表示
+                parts.push(ai.tool.name().to_string());
+            }
             if let Some(ref detail) = ai.state_detail {
                 parts.push(format!("[{}]", detail));
             }
@@ -136,5 +141,30 @@ mod tests {
         };
         assert!(pane.is_ai_pane());
         assert_eq!(pane.display_info(), "[processing] Fix bug");
+    }
+
+    #[test]
+    fn test_display_info_ai_pane_no_detail() {
+        let pane = Pane {
+            pane_id: "%3".to_string(),
+            workspace_index: 0,
+            window_name: "main".to_string(),
+            window_index: 0,
+            cwd: PathBuf::from("/tmp"),
+            command: "claude".to_string(),
+            is_active: false,
+            session_name: "main".to_string(),
+            pid: 9999,
+            ai_session: Some(AiSessionInfo {
+                tool: AiTool::Claude,
+                status: SessionStatus::Idle,
+                state_detail: None,
+                summary: None,
+                current_task: None,
+                last_activity: None,
+                external_id: None,
+            }),
+        };
+        assert_eq!(pane.display_info(), "Claude");
     }
 }
