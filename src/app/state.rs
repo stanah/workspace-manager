@@ -218,7 +218,8 @@ impl AppState {
             // RunningOnly モードでは、アクティブセッションがないワークスペースをスキップ
             if self.list_display_mode == ListDisplayMode::RunningOnly {
                 let sessions = self.sessions_for_workspace(idx);
-                if sessions.is_empty() {
+                let panes = self.panes_for_workspace(idx);
+                if sessions.is_empty() && panes.is_empty() {
                     continue;
                 }
             }
@@ -337,14 +338,26 @@ impl AppState {
                         is_last: is_last_in_group,
                     });
 
-                    // このワークスペースのセッションを追加
+                    // ペインがあればペインベース表示、なければセッションフォールバック
+                    let workspace_panes = self.panes_for_workspace(ws_idx);
                     let parent_last = is_last_in_group;
-                    for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
-                        self.tree_items.push(TreeItem::Session {
-                            session_index: sess_idx,
-                            is_last: sess_idx_pos == workspace_sessions.len() - 1,
-                            parent_is_last: parent_last,
-                        });
+
+                    if !workspace_panes.is_empty() {
+                        for (pane_idx_pos, &pane_idx) in workspace_panes.iter().enumerate() {
+                            self.tree_items.push(TreeItem::Pane {
+                                pane_index: pane_idx,
+                                is_last: pane_idx_pos == workspace_panes.len() - 1,
+                                parent_is_last: parent_last,
+                            });
+                        }
+                    } else {
+                        for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
+                            self.tree_items.push(TreeItem::Session {
+                                session_index: sess_idx,
+                                is_last: sess_idx_pos == workspace_sessions.len() - 1,
+                                parent_is_last: parent_last,
+                            });
+                        }
                     }
                 }
 
