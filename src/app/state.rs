@@ -1,5 +1,5 @@
 use crate::workspace::{
-    AiTool, Session, SessionStatus, Workspace, WorktreeManager, get_default_search_paths,
+    AiTool, Pane, Session, SessionStatus, Workspace, WorktreeManager, get_default_search_paths,
     scan_for_repositories,
 };
 use ratatui::widgets::TableState;
@@ -74,6 +74,12 @@ pub enum TreeItem {
         is_last: bool,
         parent_is_last: bool,
     },
+    /// ペイン（マルチプレクサのペイン）
+    Pane {
+        pane_index: usize,
+        is_last: bool,
+        parent_is_last: bool,
+    },
     /// ブランチ（worktree未作成）
     Branch {
         name: String,
@@ -106,6 +112,12 @@ pub struct AppState {
     session_map: HashMap<String, usize>,
     /// workspace_index -> session indices のマッピング
     sessions_by_workspace: HashMap<usize, Vec<usize>>,
+    /// 検出されたペイン一覧
+    pub panes: Vec<Pane>,
+    /// pane_id -> pane index のマッピング
+    pane_map: HashMap<String, usize>,
+    /// workspace_index -> pane indices のマッピング
+    panes_by_workspace: HashMap<usize, Vec<usize>>,
     /// 現在選択中のインデックス（tree_items内）
     pub selected_index: usize,
     /// 表示モード
@@ -143,6 +155,9 @@ impl AppState {
             expanded_remote_branches: HashSet::new(),
             session_map: HashMap::new(),
             sessions_by_workspace: HashMap::new(),
+            panes: Vec::new(),
+            pane_map: HashMap::new(),
+            panes_by_workspace: HashMap::new(),
             selected_index: 0,
             view_mode: ViewMode::List,
             list_display_mode: ListDisplayMode::default(),
@@ -203,7 +218,8 @@ impl AppState {
             // RunningOnly モードでは、アクティブセッションがないワークスペースをスキップ
             if self.list_display_mode == ListDisplayMode::RunningOnly {
                 let sessions = self.sessions_for_workspace(idx);
-                if sessions.is_empty() {
+                let panes = self.panes_for_workspace(idx);
+                if sessions.is_empty() && panes.is_empty() {
                     continue;
                 }
             }
@@ -322,14 +338,26 @@ impl AppState {
                         is_last: is_last_in_group,
                     });
 
-                    // このワークスペースのセッションを追加
+                    // ペインがあればペインベース表示、なければセッションフォールバック
+                    let workspace_panes = self.panes_for_workspace(ws_idx);
                     let parent_last = is_last_in_group;
-                    for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
-                        self.tree_items.push(TreeItem::Session {
-                            session_index: sess_idx,
-                            is_last: sess_idx_pos == workspace_sessions.len() - 1,
-                            parent_is_last: parent_last,
-                        });
+
+                    if !workspace_panes.is_empty() {
+                        for (pane_idx_pos, &pane_idx) in workspace_panes.iter().enumerate() {
+                            self.tree_items.push(TreeItem::Pane {
+                                pane_index: pane_idx,
+                                is_last: pane_idx_pos == workspace_panes.len() - 1,
+                                parent_is_last: parent_last,
+                            });
+                        }
+                    } else {
+                        for (sess_idx_pos, &sess_idx) in workspace_sessions.iter().enumerate() {
+                            self.tree_items.push(TreeItem::Session {
+                                session_index: sess_idx,
+                                is_last: sess_idx_pos == workspace_sessions.len() - 1,
+                                parent_is_last: parent_last,
+                            });
+                        }
                     }
                 }
 
@@ -557,6 +585,158 @@ impl AppState {
         }
     }
 
+    // ===== Pane management =====
+
+    /// PaneInfo リストからペイン状態を更新（差分処理）
+    pub fn update_panes(&mut self, pane_infos: &[crate::multiplexer::PaneInfo]) {
+        use crate::workspace::pane::AiSessionInfo;
+
+        let mut new_panes: Vec<Pane> = Vec::new();
+        let mut new_pane_map: HashMap<String, usize> = HashMap::new();
+        let mut new_panes_by_workspace: HashMap<usize, Vec<usize>> = HashMap::new();
+
+        for info in pane_infos {
+            let workspace_index = self.find_workspace_by_cwd(&info.cwd);
+            let Some(workspace_index) = workspace_index else {
+                continue;
+            };
+
+            let pane_index = new_panes.len();
+
+            // 既存ペインの AI セッション情報を引き継ぐ
+            let prev_ai_session = self.pane_map
+                .get(&info.pane_id)
+                .and_then(|&idx| self.panes.get(idx))
+                .and_then(|p| p.ai_session.clone());
+
+            // AI ツール検出
+            let ai_session = if let Some(tool) = Pane::detect_ai_tool(&info.command) {
+                Some(prev_ai_session.unwrap_or_else(|| AiSessionInfo {
+                    tool,
+                    status: SessionStatus::Idle,
+                    state_detail: None,
+                    summary: None,
+                    current_task: None,
+                    last_activity: Some(std::time::SystemTime::now()),
+                    external_id: None,
+                }))
+            } else {
+                None
+            };
+
+            new_panes.push(Pane {
+                pane_id: info.pane_id.clone(),
+                workspace_index,
+                window_name: info.window_name.clone(),
+                window_index: info.window_index,
+                cwd: info.cwd.clone(),
+                command: info.command.clone(),
+                is_active: info.is_active,
+                session_name: info.session_name.clone(),
+                pid: info.pid,
+                ai_session,
+            });
+
+            new_pane_map.insert(info.pane_id.clone(), pane_index);
+            new_panes_by_workspace
+                .entry(workspace_index)
+                .or_default()
+                .push(pane_index);
+        }
+
+        self.panes = new_panes;
+        self.pane_map = new_pane_map;
+        self.panes_by_workspace = new_panes_by_workspace;
+    }
+
+    /// CWD からワークスペースを最長一致で検索
+    fn find_workspace_by_cwd(&self, cwd: &std::path::Path) -> Option<usize> {
+        let cwd_str = cwd.to_string_lossy();
+        let mut best_match: Option<(usize, usize)> = None;
+
+        for (idx, ws) in self.workspaces.iter().enumerate() {
+            let ws_path = &ws.project_path;
+            if cwd_str.starts_with(ws_path)
+                && (cwd_str.len() == ws_path.len()
+                    || cwd_str.as_bytes().get(ws_path.len()) == Some(&b'/'))
+            {
+                let len = ws_path.len();
+                if best_match.map_or(true, |(_, best_len)| len > best_len) {
+                    best_match = Some((idx, len));
+                }
+            }
+        }
+
+        best_match.map(|(idx, _)| idx)
+    }
+
+    /// ワークスペースのペイン一覧を取得
+    pub fn panes_for_workspace(&self, workspace_index: usize) -> Vec<usize> {
+        self.panes_by_workspace
+            .get(&workspace_index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// ワークスペースの集約ステータスを取得（ペインベース）
+    pub fn workspace_aggregate_status_from_panes(&self, workspace_index: usize) -> SessionStatus {
+        let pane_indices = self.panes_for_workspace(workspace_index);
+        if pane_indices.is_empty() {
+            return SessionStatus::Disconnected;
+        }
+
+        let mut has_working = false;
+        let mut has_needs_input = false;
+        let mut has_idle = false;
+
+        for &idx in &pane_indices {
+            if let Some(pane) = self.panes.get(idx) {
+                if let Some(status) = pane.ai_status() {
+                    match status {
+                        SessionStatus::Working => has_working = true,
+                        SessionStatus::NeedsInput => has_needs_input = true,
+                        SessionStatus::Idle | SessionStatus::Success => has_idle = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if has_working {
+            SessionStatus::Working
+        } else if has_needs_input {
+            SessionStatus::NeedsInput
+        } else if has_idle {
+            SessionStatus::Idle
+        } else {
+            SessionStatus::Disconnected
+        }
+    }
+
+    /// ペインの AI セッション情報を外部IDで更新
+    pub fn update_pane_ai_session_by_external_id(
+        &mut self,
+        external_id: &str,
+        updater: impl FnOnce(&mut crate::workspace::pane::AiSessionInfo),
+    ) {
+        for pane in &mut self.panes {
+            if let Some(ref mut ai) = pane.ai_session {
+                if ai.external_id.as_deref() == Some(external_id) {
+                    updater(ai);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// 現在選択中のペインを取得
+    pub fn selected_pane(&self) -> Option<&Pane> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::Pane { pane_index, .. }) => self.panes.get(*pane_index),
+            _ => None,
+        }
+    }
+
     // ===== Navigation =====
 
     /// 選択インデックスを設定し、テーブルのスクロール状態も同期する
@@ -618,6 +798,7 @@ impl AppState {
             }
             Some(TreeItem::Worktree { .. })
             | Some(TreeItem::Session { .. })
+            | Some(TreeItem::Pane { .. })
             | Some(TreeItem::Branch { .. }) => {
                 // 子アイテム: 親RepoGroupへ移動
                 self.move_to_parent_repo_group();
@@ -646,6 +827,7 @@ impl AppState {
             }
             Some(TreeItem::Worktree { .. })
             | Some(TreeItem::Session { .. })
+            | Some(TreeItem::Pane { .. })
             | Some(TreeItem::Branch { .. }) => {
                 // 子アイテム: 親RepoGroupに移動して折りたたみ
                 if let Some(parent_idx) = self.find_parent_repo_group_index() {
@@ -696,6 +878,11 @@ impl AppState {
             Some(TreeItem::Session { session_index, .. }) => {
                 self.sessions.get(*session_index).and_then(|s| {
                     self.workspaces.get(s.workspace_index)
+                })
+            }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces.get(p.workspace_index)
                 })
             }
             Some(TreeItem::RepoGroup { .. })
@@ -775,6 +962,11 @@ impl AppState {
             Some(TreeItem::Session { session_index, .. }) => {
                 self.sessions.get(*session_index).and_then(|s| {
                     self.workspaces.get(s.workspace_index).map(|ws| ws.branch.clone())
+                })
+            }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces.get(p.workspace_index).map(|ws| ws.branch.clone())
                 })
             }
             Some(TreeItem::RepoGroup { .. }) => {
@@ -924,6 +1116,13 @@ impl AppState {
                 self.sessions.get(*session_index).and_then(|s| {
                     self.workspaces
                         .get(s.workspace_index)
+                        .map(|ws| ws.project_path.clone())
+                })
+            }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces
+                        .get(p.workspace_index)
                         .map(|ws| ws.project_path.clone())
                 })
             }

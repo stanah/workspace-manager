@@ -13,7 +13,8 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
-use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher};
+use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher, StatusState};
+use workspace_manager::workspace::SessionStatus;
 use workspace_manager::multiplexer::{self, Multiplexer, WindowActionResult};
 use workspace_manager::notify::{self, NotifyMessage};
 use workspace_manager::ui;
@@ -679,6 +680,19 @@ fn run_app(
                 tracing::debug!("No session name configured");
             }
 
+            // ペイン情報をポーリング
+            match mux.list_all_panes() {
+                Ok(panes) if !panes.is_empty() => {
+                    tracing::debug!("Polled {} panes", panes.len());
+                    state.update_panes(&panes);
+                    state.rebuild_tree_with_manager(Some(worktree_manager));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!("Failed to poll panes: {}", e);
+                }
+            }
+
             // Update workspace list for Kiro SQLite polling
             if let Some(ref tx) = workspace_watch_tx {
                 let paths: Vec<String> = state.workspaces.iter().map(|w| w.project_path.clone()).collect();
@@ -1031,6 +1045,28 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
                 );
                 // Rebuild tree to show the new session
                 state.rebuild_tree_with_manager(Some(worktree_manager));
+
+                // Try to link session to a pane by matching workspace + tool command
+                let tool_cmd = match tool {
+                    AiTool::Claude => "claude",
+                    AiTool::Kiro => "kiro",
+                    AiTool::OpenCode => "opencode",
+                    AiTool::Codex => "codex",
+                };
+                let ws_idx_for_pane = state.find_workspace_by_path(&project_path);
+                if let Some(ws_idx) = ws_idx_for_pane {
+                    for pane in &mut state.panes {
+                        if pane.workspace_index == ws_idx
+                            && pane.command == tool_cmd
+                            && pane.ai_session.as_ref().map_or(true, |ai| ai.external_id.is_none())
+                        {
+                            if let Some(ref mut ai) = pane.ai_session {
+                                ai.external_id = Some(external_id.clone());
+                            }
+                            break;
+                        }
+                    }
+                }
             } else {
                 tracing::warn!(
                     "No matching workspace found for path: {}",
@@ -1104,6 +1140,30 @@ fn handle_notify_event(state: &mut AppState, event: AppEvent, worktree_manager: 
                     session.summary
                 );
             }
+
+            // Also update matching pane AI session
+            state.update_pane_ai_session_by_external_id(&external_id, |ai| {
+                ai.summary = status.display_summary();
+                ai.current_task = status.current_task.clone();
+                ai.state_detail = Some(status.state_detail.label().to_string());
+                ai.status = match status.status {
+                    StatusState::Working => SessionStatus::Working,
+                    StatusState::Waiting => SessionStatus::NeedsInput,
+                    StatusState::Completed => SessionStatus::Success,
+                    StatusState::Error => SessionStatus::Error,
+                    StatusState::Idle => SessionStatus::Idle,
+                    StatusState::Disconnected => SessionStatus::Disconnected,
+                };
+                if let Some(activity) = status.last_activity {
+                    ai.last_activity = activity
+                        .timestamp_millis()
+                        .try_into()
+                        .ok()
+                        .map(|millis: u64| {
+                            std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis)
+                        });
+                }
+            });
         }
         _ => {}
     }
@@ -1141,7 +1201,31 @@ fn handle_action(
             state.rebuild_tree_with_manager(Some(_worktree_manager));
         }
         Action::Select => {
-            if let Some(ws) = state.selected_workspace() {
+            // ペインが選択されている場合: タブ切替 + ペインフォーカス
+            if let Some(pane) = state.selected_pane() {
+                if mux.is_available() && mux.backend() == multiplexer::MultiplexerBackend::Tmux {
+                    let session = pane.session_name.clone();
+                    let window_index = pane.window_index;
+                    let pane_id = pane.pane_id.clone();
+
+                    // ウィンドウ切替
+                    if let Err(e) = mux.go_to_window(&session, &window_index.to_string()) {
+                        state.status_message = Some(format!("Failed to switch window: {}", e));
+                    } else {
+                        // ペインフォーカス (pane_id is like "%12")
+                        let pane_id_num: Option<u32> = pane_id.strip_prefix('%')
+                            .and_then(|s| s.parse().ok());
+                        if let Some(id) = pane_id_num {
+                            if let Err(e) = mux.focus_pane(id) {
+                                state.status_message = Some(format!("Failed to focus pane: {}", e));
+                            } else {
+                                state.status_message = Some(format!("Focused pane {}", pane_id));
+                                run_post_select_command(config);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(ws) = state.selected_workspace() {
                 // Internal mode: ペインにフォーカス
                 if mux.is_internal() {
                     let workspace_index = state.workspaces.iter().position(|w| w.id == ws.id);

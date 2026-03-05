@@ -5,6 +5,19 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// ペイン情報（マルチプレクサから取得）
+#[derive(Debug, Clone)]
+pub struct PaneInfo {
+    pub session_name: String,
+    pub window_index: u32,
+    pub window_name: String,
+    pub pane_id: String,
+    pub cwd: PathBuf,
+    pub command: String,
+    pub is_active: bool,
+    pub pid: u32,
+}
+
 /// マルチプレクサバックエンドの種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -92,6 +105,11 @@ pub trait Multiplexer {
 
     /// 現在フォーカス中のタブ/ウィンドウにペインを追加（External mode用）
     fn new_pane(&self, session: &str, cwd: &Path) -> Result<()>;
+
+    /// 全セッションの全ペイン情報を取得（ポーリング用）
+    fn list_all_panes(&self) -> Result<Vec<PaneInfo>> {
+        Ok(Vec::new()) // デフォルト: 空リスト
+    }
 
     // === tmux 固有（オプショナル） ===
 
