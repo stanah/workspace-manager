@@ -106,6 +106,8 @@ pub enum Action {
     FilterBranches,
     /// フィルタークリア
     ClearFilter,
+    /// お気に入りトグル
+    ToggleFavorite,
     /// 何もしない
     None,
 }
@@ -151,6 +153,8 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('x'), _) => Action::CloseWorkspace,
             // ブランチフィルター
             (KeyCode::Char('/'), _) => Action::FilterBranches,
+            // お気に入り
+            (KeyCode::Char('f'), _) => Action::ToggleFavorite,
             // その他
             _ => Action::None,
         }

@@ -175,6 +175,9 @@ pub struct Config {
     /// Log watch設定
     #[serde(default)]
     pub logwatch: LogWatchConfig,
+    /// お気に入りリポジトリ（repo_key のリスト）
+    #[serde(default)]
+    pub favorite_repos: Vec<String>,
 }
 
 fn default_use_nerd_font() -> bool {
@@ -200,6 +203,7 @@ impl Default for Config {
             multiplexer: None,
             worktree: WorktreeConfig::default(),
             logwatch: LogWatchConfig::default(),
+            favorite_repos: Vec::new(),
         }
     }
 }

@@ -64,6 +64,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
     match item {
         TreeItem::RepoGroup {
             name,
+            path,
             worktree_count,
             ..
         } => {
@@ -72,12 +73,16 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD);
             let count_style = Style::default().fg(Color::DarkGray);
+            let is_favorite = state.favorite_repos.contains(path);
 
-            Row::new(vec![Line::from(vec![
-                Span::styled(name.clone(), name_style),
-                Span::styled(format!(" ({})", worktree_count), count_style),
-            ])])
-            .height(1)
+            let mut spans = Vec::new();
+            if is_favorite {
+                spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
+            }
+            spans.push(Span::styled(name.clone(), name_style));
+            spans.push(Span::styled(format!(" ({})", worktree_count), count_style));
+
+            Row::new(vec![Line::from(spans)]).height(1)
         }
         TreeItem::Worktree {
             workspace_index,
@@ -279,6 +284,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             } else {
                 Row::new(vec![Line::from("    └ <invalid pane>")]).height(1)
             }
+        }
+        TreeItem::Separator => {
+            Row::new(vec![Line::from(vec![
+                Span::styled("────────────────────────────────", Style::default().fg(Color::DarkGray)),
+            ])])
+            .height(1)
         }
     }
 }

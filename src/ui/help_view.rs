@@ -49,6 +49,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::styled("  /    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Filter branches"),
         ]),
+        Line::from(vec![
+            Span::styled("  f    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Toggle favorite repo"),
+        ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Worktree Management", Style::default().add_modifier(Modifier::BOLD)),

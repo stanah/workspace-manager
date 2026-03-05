@@ -345,6 +345,7 @@ fn run_tui() -> Result<()> {
     let mut state = AppState::new();
     state.use_nerd_font = config.use_nerd_font;
     state.tab_name_template = config.effective_multiplexer_config().tab_name_template;
+    state.favorite_repos = config.favorite_repos.iter().cloned().collect();
     let mut mux = multiplexer::create_multiplexer(
         config.multiplexer.as_ref(),
         &config.zellij,
@@ -1361,6 +1362,23 @@ fn handle_action(
             state.branch_filter = None;
             state.rebuild_tree_with_manager(Some(_worktree_manager));
             state.status_message = Some("Filter cleared".to_string());
+        }
+        Action::ToggleFavorite => {
+            if let Some(repo_key) = state.selected_repo_key() {
+                state.toggle_favorite(&repo_key);
+                // 設定に保存
+                config.favorite_repos = state.favorite_repos.iter().cloned().collect();
+                if let Err(e) = config.save() {
+                    tracing::warn!("Failed to save favorites: {}", e);
+                }
+                state.rebuild_tree_with_manager(Some(_worktree_manager));
+                let is_fav = state.favorite_repos.contains(&repo_key);
+                state.status_message = Some(if is_fav {
+                    format!("★ {} added to favorites", repo_key)
+                } else {
+                    format!("☆ {} removed from favorites", repo_key)
+                });
+            }
         }
         Action::CreateWorktree => {
             // ブランチが選択されている場合は即座にworktree作成

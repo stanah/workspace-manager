@@ -94,6 +94,8 @@ pub enum TreeItem {
         count: usize,
         is_last: bool,
     },
+    /// 区切り線
+    Separator,
 }
 
 /// アプリケーション状態
@@ -142,6 +144,8 @@ pub struct AppState {
     pub use_nerd_font: bool,
     /// タブ名テンプレート（マッチング用）
     pub tab_name_template: String,
+    /// お気に入りリポジトリ（repo_key のセット）
+    pub favorite_repos: HashSet<String>,
 }
 
 impl AppState {
@@ -170,6 +174,7 @@ impl AppState {
             table_state: TableState::default(),
             use_nerd_font: true,
             tab_name_template: "{repo}/{branch}".to_string(),
+            favorite_repos: HashSet::new(),
         }
     }
 
@@ -233,11 +238,29 @@ impl AppState {
                 .or_insert_with(|| ws.project_path.clone());
         }
 
-        // ソートしてツリーアイテムを構築
-        let mut repo_keys: Vec<_> = repo_groups.keys().cloned().collect();
-        repo_keys.sort();
+        // お気に入りを先頭に、それ以外を後に
+        let mut fav_keys: Vec<_> = repo_groups.keys()
+            .filter(|k| self.favorite_repos.contains(k.as_str()))
+            .cloned().collect();
+        let mut other_keys: Vec<_> = repo_groups.keys()
+            .filter(|k| !self.favorite_repos.contains(k.as_str()))
+            .cloned().collect();
+        fav_keys.sort();
+        other_keys.sort();
+
+        let has_favorites = !fav_keys.is_empty();
+        let has_others = !other_keys.is_empty();
+        let mut repo_keys = fav_keys;
+        if has_favorites && has_others {
+            repo_keys.push("__separator__".to_string());
+        }
+        repo_keys.extend(other_keys);
 
         for repo_key in repo_keys {
+            if repo_key == "__separator__" {
+                self.tree_items.push(TreeItem::Separator);
+                continue;
+            }
             let indices = &repo_groups[&repo_key];
             let is_expanded = !self.collapsed_repos.contains(&repo_key);
             let repo_path = repo_paths.get(&repo_key).cloned().unwrap_or_default();
@@ -401,7 +424,7 @@ impl AppState {
     }
 
     /// ワークスペースからリポジトリキーを取得
-    fn get_repo_key(&self, ws: &Workspace) -> String {
+    pub fn get_repo_key(&self, ws: &Workspace) -> String {
         // Parallelスタイルのworktreeを検出: repo__branch 形式
         // 例: config__feature -> config
         if let Some(idx) = ws.repo_name.rfind("__") {
@@ -737,6 +760,36 @@ impl AppState {
         }
     }
 
+    /// 選択中のアイテムが属するリポジトリキーを取得
+    pub fn selected_repo_key(&self) -> Option<String> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::RepoGroup { path, .. }) => Some(path.clone()),
+            Some(TreeItem::Worktree { workspace_index, .. }) => {
+                self.workspaces.get(*workspace_index).map(|ws| self.get_repo_key(ws))
+            }
+            Some(TreeItem::Session { session_index, .. }) => {
+                self.sessions.get(*session_index).and_then(|s| {
+                    self.workspaces.get(s.workspace_index).map(|ws| self.get_repo_key(ws))
+                })
+            }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces.get(p.workspace_index).map(|ws| self.get_repo_key(ws))
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// お気に入りをトグル
+    pub fn toggle_favorite(&mut self, repo_key: &str) {
+        if self.favorite_repos.contains(repo_key) {
+            self.favorite_repos.remove(repo_key);
+        } else {
+            self.favorite_repos.insert(repo_key.to_string());
+        }
+    }
+
     // ===== Navigation =====
 
     /// 選択インデックスを設定し、テーブルのスクロール状態も同期する
@@ -748,14 +801,26 @@ impl AppState {
     /// 選択を上に移動
     pub fn move_up(&mut self) {
         if !self.tree_items.is_empty() && self.selected_index > 0 {
-            self.set_selected_index(self.selected_index - 1);
+            let mut new_index = self.selected_index - 1;
+            // Separator をスキップ
+            if matches!(self.tree_items.get(new_index), Some(TreeItem::Separator)) && new_index > 0 {
+                new_index -= 1;
+            }
+            self.set_selected_index(new_index);
         }
     }
 
     /// 選択を下に移動
     pub fn move_down(&mut self) {
         if !self.tree_items.is_empty() && self.selected_index < self.tree_items.len() - 1 {
-            self.set_selected_index(self.selected_index + 1);
+            let mut new_index = self.selected_index + 1;
+            // Separator をスキップ
+            if matches!(self.tree_items.get(new_index), Some(TreeItem::Separator))
+                && new_index < self.tree_items.len() - 1
+            {
+                new_index += 1;
+            }
+            self.set_selected_index(new_index);
         }
     }
 
@@ -803,7 +868,7 @@ impl AppState {
                 // 子アイテム: 親RepoGroupへ移動
                 self.move_to_parent_repo_group();
             }
-            None => {}
+            Some(TreeItem::Separator) | None => {}
         }
     }
 
@@ -837,7 +902,7 @@ impl AppState {
                     }
                 }
             }
-            None => {}
+            Some(TreeItem::Separator) | None => {}
         }
     }
 
@@ -887,8 +952,8 @@ impl AppState {
             }
             Some(TreeItem::RepoGroup { .. })
             | Some(TreeItem::Branch { .. })
-            | Some(TreeItem::RemoteBranchGroup { .. }) => {
-                // グループまたはブランチが選択されている場合はNone
+            | Some(TreeItem::RemoteBranchGroup { .. })
+            | Some(TreeItem::Separator) => {
                 None
             }
             None => None,
@@ -1139,7 +1204,7 @@ impl AppState {
                 }
                 None
             }
-            None => None,
+            Some(TreeItem::Separator) | None => None,
         };
         path.map(|p| resolve_repo_root(&p))
     }
