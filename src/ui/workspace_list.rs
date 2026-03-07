@@ -248,6 +248,13 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Span::styled("  ", Style::default())
                 };
 
+                // アクティブペインの行スタイル（背景色で強調）
+                let row_style = if pane.is_active {
+                    Style::default().bg(Color::Rgb(30, 50, 30))
+                } else {
+                    Style::default()
+                };
+
                 if pane.is_ai_pane() {
                     // AI ペイン: 従来の Session 表示と同じフォーマット
                     let ai = pane.ai_session.as_ref().unwrap();
@@ -273,7 +280,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                         Span::styled(info, name_style),
                     ];
 
-                    Row::new(vec![Line::from(spans)]).height(1)
+                    Row::new(vec![Line::from(spans)]).height(1).style(row_style)
                 } else {
                     // 通常ペイン: コマンド名
                     let name_style = if pane.is_active {
@@ -290,7 +297,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                         Span::styled(pane.command.clone(), name_style),
                     ];
 
-                    Row::new(vec![Line::from(spans)]).height(1)
+                    Row::new(vec![Line::from(spans)]).height(1).style(row_style)
                 }
             } else {
                 Row::new(vec![Line::from("    └ <invalid pane>")]).height(1)
