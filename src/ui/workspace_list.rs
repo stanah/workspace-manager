@@ -1,8 +1,8 @@
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::{Alignment, Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
 
@@ -41,8 +41,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .map(|(idx, item)| create_tree_row(item, state, idx == state.selected_index))
         .collect();
 
-    // 単一カラムレイアウト（狭いペイン対応）
-    let widths = [Constraint::Min(10)];
+    // 2カラム: メインコンテンツ + 右端のペインID
+    let widths = [Constraint::Min(10), Constraint::Length(4)];
 
     let table = Table::new(rows, widths)
         .block(
@@ -234,6 +234,11 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Style::default()
                 };
 
+                let pane_id_cell = Cell::from(
+                    Line::from(Span::styled(pane.pane_id.clone(), Style::default().fg(Color::DarkGray)))
+                        .alignment(Alignment::Right),
+                );
+
                 if pane.is_ai_pane() {
                     // AI ペイン: ツールアイコンとステータスを表示
                     let ai = pane.ai_session.as_ref().unwrap();
@@ -251,14 +256,14 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                         Style::default().fg(Color::Gray)
                     };
 
-                    let spans = vec![
+                    let main_cell = Cell::from(Line::from(vec![
                         Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
                         Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                         Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
                         Span::styled(info, name_style),
-                    ];
+                    ]));
 
-                    Row::new(vec![Line::from(spans)]).height(1).style(row_style)
+                    Row::new(vec![main_cell, pane_id_cell]).height(1).style(row_style)
                 } else {
                     // 通常ペイン: コマンド名
                     let name_style = if pane.is_active {
@@ -269,12 +274,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                         Style::default().fg(Color::Gray)
                     };
 
-                    let spans = vec![
+                    let main_cell = Cell::from(Line::from(vec![
                         Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
                         Span::styled(pane.command.clone(), name_style),
-                    ];
+                    ]));
 
-                    Row::new(vec![Line::from(spans)]).height(1).style(row_style)
+                    Row::new(vec![main_cell, pane_id_cell]).height(1).style(row_style)
                 }
             } else {
                 Row::new(vec![Line::from("└ <invalid pane>")]).height(1)
