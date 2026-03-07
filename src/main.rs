@@ -706,7 +706,10 @@ fn run_app(
             ui::render(frame, state);
         })?;
 
-        if let Some(event) = poll_event(Duration::from_millis(100))? {
+        // イベントをバッチ処理：溜まったイベントをすべて消化してから次の描画へ
+        // 最初のpollだけタイムアウト付き（描画更新間隔）、以降は即座にチェック
+        let mut has_event = poll_event(Duration::from_millis(100))?;
+        while let Some(event) = has_event {
             match state.view_mode {
                 ViewMode::Input => {
                     if let AppEvent::Key(key) = event {
@@ -751,6 +754,11 @@ fn run_app(
                     _ => {}
                 },
             }
+            if state.should_quit {
+                break;
+            }
+            // 残りのイベントをタイムアウトなしで即座にチェック
+            has_event = poll_event(Duration::from_millis(0))?;
         }
 
         if state.should_quit {
