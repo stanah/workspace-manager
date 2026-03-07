@@ -86,11 +86,10 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         }
         TreeItem::Worktree {
             workspace_index,
-            is_last,
+            ..
         } => {
-            // worktree行: ステータスアイコンをブランチ名の前に表示
+            // worktree行: ブランチアイコン＋名前（ツリー罫線なし）
             if let Some(ws) = state.workspaces.get(*workspace_index) {
-                let tree_prefix = if *is_last { "└ " } else { "├ " };
                 let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
 
                 // ブランチアイコン
@@ -122,8 +121,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 };
 
                 let mut spans = vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(" ", Style::default()),
                     Span::styled(format!("{}{}", branch_icon, ws.branch), name_style),
                 ];
 
@@ -134,19 +132,17 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
 
                 Row::new(vec![Line::from(spans)]).height(1)
             } else {
-                Row::new(vec![Line::from("  └ <invalid>")]).height(1)
+                Row::new(vec![Line::from("<invalid>")]).height(1)
             }
         }
         TreeItem::Session {
             session_index,
             is_last,
-            parent_is_last,
+            ..
         } => {
             // セッション行: ツールアイコンとステータスを表示
             if let Some(session) = state.sessions.get(*session_index) {
-                let continuation = if *parent_is_last { "  " } else { "│ " };
                 let branch_char = if *is_last { "└ " } else { "├ " };
-                let tree_prefix = format!("{}{}", continuation, branch_char);
 
                 // ツールアイコンとステータス
                 let tool_icon = session.tool.icon(state.use_nerd_font);
@@ -164,8 +160,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 };
 
                 let spans = vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                    Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
                     Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                     Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
                     Span::styled(info, name_style.fg(Color::DarkGray)),
@@ -173,24 +168,20 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
 
                 Row::new(vec![Line::from(spans)]).height(1)
             } else {
-                Row::new(vec![Line::from("    └ <invalid session>")]).height(1)
+                Row::new(vec![Line::from("└ <invalid session>")]).height(1)
             }
         }
         TreeItem::RemoteBranchGroup {
             expanded,
             count,
-            is_last,
             ..
         } => {
             // リモートブランチグループ行
-            let tree_prefix = if *is_last { "└ " } else { "├ " };
             let expand_icon = if *expanded { "▼" } else { "▶" };
             let label_style = Style::default().fg(Color::DarkGray);
             let count_style = Style::default().fg(Color::DarkGray);
 
             Row::new(vec![Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{} ", expand_icon), label_style),
                 Span::styled("Remote Branches", label_style),
                 Span::styled(format!(" ({})", count), count_style),
@@ -200,14 +191,11 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         TreeItem::Branch {
             name,
             is_local,
-            is_last,
             ..
         } => {
             // ブランチ行（worktree未作成）- 控えめな暗い色で表示
-            let tree_prefix = if *is_last { "└ " } else { "├ " };
-
             // リモートブランチはRemoteBranchGroupの子として追加インデント
-            let indent = if *is_local { "  " } else { "    " };
+            let indent = if *is_local { "" } else { "  " };
 
             // リモートは "origin/..." 形式で表示
             let display_name = if *is_local {
@@ -226,7 +214,6 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
 
             Row::new(vec![Line::from(vec![
                 Span::styled(indent, Style::default()),
-                Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
                 Span::styled("  ", Style::default()), // アイコン分のスペース
                 Span::styled(display_name, name_style),
             ])])
@@ -235,18 +222,10 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         TreeItem::Pane {
             pane_index,
             is_last,
-            parent_is_last,
+            ..
         } => {
             if let Some(pane) = state.panes.get(*pane_index) {
-                let continuation = if *parent_is_last { "  " } else { "│ " };
-                let branch_char = if *is_last { "└ " } else { "├ " };
-                let tree_prefix = format!("{}{}", continuation, branch_char);
-                // 行頭をアクティブインジケータに使用
-                let leading = if pane.is_active {
-                    Span::styled("▶ ", Style::default().fg(Color::Green))
-                } else {
-                    Span::styled("  ", Style::default())
-                };
+                let branch_char = if *is_last { " └ " } else { " ├ " };
 
                 // アクティブペインの行スタイル（背景色で強調）
                 let row_style = if pane.is_active {
@@ -256,7 +235,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 };
 
                 if pane.is_ai_pane() {
-                    // AI ペイン: 従来の Session 表示と同じフォーマット
+                    // AI ペイン: ツールアイコンとステータスを表示
                     let ai = pane.ai_session.as_ref().unwrap();
                     let tool_icon = ai.tool.icon(state.use_nerd_font);
                     let tool_color = ai.tool.color();
@@ -273,8 +252,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     };
 
                     let spans = vec![
-                        leading,
-                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
                         Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                         Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
                         Span::styled(info, name_style),
@@ -292,15 +270,14 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     };
 
                     let spans = vec![
-                        leading,
-                        Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
                         Span::styled(pane.command.clone(), name_style),
                     ];
 
                     Row::new(vec![Line::from(spans)]).height(1).style(row_style)
                 }
             } else {
-                Row::new(vec![Line::from("    └ <invalid pane>")]).height(1)
+                Row::new(vec![Line::from("└ <invalid pane>")]).height(1)
             }
         }
         TreeItem::Separator => {
