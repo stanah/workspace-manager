@@ -93,14 +93,21 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let tree_prefix = if *is_last { "└ " } else { "├ " };
                 let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
 
-                // ブランチ名のスタイル：開いていれば緑、選択中は太字
+                // ブランチアイコン
+                let branch_icon = if state.use_nerd_font { "\u{E0A0} " } else { "⎇ " };
+
+                // ブランチ名のスタイル：開いていれば緑、選択中は太字、下線で区別
                 let name_style = match (is_selected, is_open) {
                     (true, true) => Style::default()
                         .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                    (true, false) => Style::default().add_modifier(Modifier::BOLD),
-                    (false, true) => Style::default().fg(Color::Green),
-                    (false, false) => Style::default(),
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    (true, false) => Style::default()
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    (false, true) => Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::UNDERLINED),
+                    (false, false) => Style::default()
+                        .add_modifier(Modifier::UNDERLINED),
                 };
 
                 // ペイン数またはセッション数を表示
@@ -117,7 +124,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let mut spans = vec![
                     Span::styled("  ", Style::default()),
                     Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
-                    Span::styled(ws.branch.clone(), name_style),
+                    Span::styled(format!("{}{}", branch_icon, ws.branch), name_style),
                 ];
 
                 // セッション数/ペイン数を追加
@@ -253,9 +260,9 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     let name_style = if pane.is_active {
                         Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
                     } else if is_selected {
-                        Style::default().add_modifier(Modifier::BOLD)
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray)
                     } else {
-                        Style::default()
+                        Style::default().fg(Color::Gray)
                     };
 
                     let spans = vec![
@@ -263,7 +270,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                         Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
                         Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                         Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
-                        Span::styled(info, name_style.fg(Color::DarkGray)),
+                        Span::styled(info, name_style),
                     ];
 
                     Row::new(vec![Line::from(spans)]).height(1)
@@ -272,9 +279,9 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     let name_style = if pane.is_active {
                         Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
                     } else if is_selected {
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::Gray)
                     };
 
                     let spans = vec![
