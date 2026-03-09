@@ -5,6 +5,7 @@ use crate::workspace::{
 use ratatui::widgets::TableState;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 use crate::ui::{InputDialog, SelectionContext, SelectionDialog, SelectionDialogKind};
 
@@ -51,6 +52,15 @@ impl ListDisplayMode {
             Self::RunningOnly => "Running",
         }
     }
+}
+
+/// Yaziに送信するコマンド
+#[derive(Debug, Clone)]
+pub enum YaziCommand {
+    /// ya emit cd <path>
+    Cd(std::path::PathBuf),
+    /// ya emit reveal <path>
+    Reveal(std::path::PathBuf),
 }
 
 /// ツリー表示用のアイテム
@@ -146,6 +156,8 @@ pub struct AppState {
     pub tab_name_template: String,
     /// お気に入りリポジトリ（repo_key のセット）
     pub favorite_repos: HashSet<String>,
+    /// Yazi連携: デバウンス中のコマンド (発火時刻, コマンド)
+    pub pending_yazi: Option<(Instant, YaziCommand)>,
 }
 
 impl AppState {
@@ -175,6 +187,7 @@ impl AppState {
             use_nerd_font: true,
             tab_name_template: "{repo}/{branch}".to_string(),
             favorite_repos: HashSet::new(),
+            pending_yazi: None,
         }
     }
 
@@ -1207,6 +1220,75 @@ impl AppState {
             Some(TreeItem::Separator) | None => None,
         };
         path.map(|p| resolve_repo_root(&p))
+    }
+
+    /// 現在の選択からYaziコマンドを解決する
+    pub fn resolve_yazi_command(&self) -> Option<YaziCommand> {
+        let selected = self.tree_items.get(self.selected_index)?;
+        match selected {
+            TreeItem::RepoGroup { path, .. } => {
+                Some(YaziCommand::Cd(std::path::PathBuf::from(path)))
+            }
+            TreeItem::Worktree { workspace_index, .. } => {
+                let ws = self.workspaces.get(*workspace_index)?;
+                Some(YaziCommand::Cd(std::path::PathBuf::from(&ws.project_path)))
+            }
+            TreeItem::Session { session_index, .. } => {
+                let session = self.sessions.get(*session_index)?;
+                let ws = self.workspaces.get(session.workspace_index)?;
+                Some(YaziCommand::Cd(std::path::PathBuf::from(&ws.project_path)))
+            }
+            TreeItem::Pane { pane_index, .. } => {
+                let pane = self.panes.get(*pane_index)?;
+                Some(YaziCommand::Reveal(pane.cwd.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Yaziデバウンスタイマーをセットする
+    pub fn schedule_yazi(&mut self, debounce_ms: u64) {
+        if let Some(cmd) = self.resolve_yazi_command() {
+            let deadline = Instant::now() + std::time::Duration::from_millis(debounce_ms);
+            self.pending_yazi = Some((deadline, cmd));
+        }
+    }
+
+    /// Yaziデバウンスタイマーが発火可能か確認し、発火する
+    pub fn fire_yazi_if_ready(&mut self) {
+        if let Some((deadline, _)) = &self.pending_yazi {
+            if Instant::now() >= *deadline {
+                if let Some((_, cmd)) = self.pending_yazi.take() {
+                    let args: Vec<String> = match &cmd {
+                        YaziCommand::Cd(p) => vec![
+                            "emit".to_string(),
+                            "cd".to_string(),
+                            p.to_string_lossy().to_string(),
+                        ],
+                        YaziCommand::Reveal(p) => vec![
+                            "emit".to_string(),
+                            "reveal".to_string(),
+                            p.to_string_lossy().to_string(),
+                        ],
+                    };
+                    match std::process::Command::new("ya").args(&args).spawn() {
+                        Ok(_) => {
+                            tracing::debug!("Sent yazi command: ya {}", args.join(" "));
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to send yazi command: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Yaziデバウンスのデッドラインまでの残り時間を返す
+    pub fn yazi_timeout(&self) -> Option<std::time::Duration> {
+        self.pending_yazi.as_ref().map(|(deadline, _)| {
+            deadline.saturating_duration_since(Instant::now())
+        })
     }
 }
 
