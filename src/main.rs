@@ -687,6 +687,23 @@ fn run_app(
             match mux.list_all_panes() {
                 Ok(panes) if !panes.is_empty() => {
                     tracing::debug!("Polled {} panes", panes.len());
+                    // アクティブペインのcwd変化を検出してyaziに通知
+                    if yazi_config.enabled {
+                        let prev_active_cwd = state.panes.iter()
+                            .find(|p| p.is_active)
+                            .map(|p| p.cwd.clone());
+                        let new_active_cwd = panes.iter()
+                            .find(|p| p.is_active)
+                            .map(|p| p.cwd.clone());
+                        if new_active_cwd != prev_active_cwd {
+                            if let Some(cwd) = &new_active_cwd {
+                                state.pending_yazi = Some((
+                                    Instant::now(),
+                                    workspace_manager::app::state::YaziCommand::Reveal(cwd.clone()),
+                                ));
+                            }
+                        }
+                    }
                     state.update_panes(&panes);
                     state.rebuild_tree_with_manager(Some(worktree_manager));
                 }
@@ -735,15 +752,13 @@ fn run_app(
                 }
                 _ => match event {
                     AppEvent::Key(key) => {
-                        let prev_index = state.selected_index;
                         let action = Action::from(key);
                         handle_action(state, mux, config, worktree_manager, action)?;
-                        if yazi_config.enabled && state.selected_index != prev_index {
+                        if yazi_config.enabled {
                             state.schedule_yazi(yazi_config.debounce_ms);
                         }
                     }
                     AppEvent::Mouse(mouse) => {
-                        let prev_index = state.selected_index;
                         // header_height = 1 (border only, no header row in Table)
                         let action = mouse_action(mouse, 0, 1);
                         // ダブルクリック検出
@@ -766,7 +781,7 @@ fn run_app(
                             other => other,
                         };
                         handle_action(state, mux, config, worktree_manager, action)?;
-                        if yazi_config.enabled && state.selected_index != prev_index {
+                        if yazi_config.enabled {
                             state.schedule_yazi(yazi_config.debounce_ms);
                         }
                     }
