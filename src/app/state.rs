@@ -158,6 +158,8 @@ pub struct AppState {
     pub favorite_repos: HashSet<String>,
     /// Yazi連携: デバウンス中のコマンド (発火時刻, コマンド)
     pub pending_yazi: Option<(Instant, YaziCommand)>,
+    /// Yazi連携: 最後に送信したコマンドのパス（重複送信防止）
+    pub last_yazi_path: Option<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -188,6 +190,7 @@ impl AppState {
             tab_name_template: "{repo}/{branch}".to_string(),
             favorite_repos: HashSet::new(),
             pending_yazi: None,
+            last_yazi_path: None,
         }
     }
 
@@ -1246,9 +1249,15 @@ impl AppState {
         }
     }
 
-    /// Yaziデバウンスタイマーをセットする
+    /// Yaziデバウンスタイマーをセットする（前回と同じパスならスキップ）
     pub fn schedule_yazi(&mut self, debounce_ms: u64) {
         if let Some(cmd) = self.resolve_yazi_command() {
+            let new_path = match &cmd {
+                YaziCommand::Cd(p) | YaziCommand::Reveal(p) => p.clone(),
+            };
+            if self.last_yazi_path.as_ref() == Some(&new_path) {
+                return;
+            }
             let deadline = Instant::now() + std::time::Duration::from_millis(debounce_ms);
             self.pending_yazi = Some((deadline, cmd));
         }
@@ -1259,6 +1268,9 @@ impl AppState {
         if let Some((deadline, _)) = &self.pending_yazi {
             if Instant::now() >= *deadline {
                 if let Some((_, cmd)) = self.pending_yazi.take() {
+                    let path = match &cmd {
+                        YaziCommand::Cd(p) | YaziCommand::Reveal(p) => p.clone(),
+                    };
                     let args: Vec<String> = match &cmd {
                         YaziCommand::Cd(p) => vec![
                             "emit-to".to_string(),
@@ -1276,6 +1288,7 @@ impl AppState {
                     match std::process::Command::new("ya").args(&args).spawn() {
                         Ok(_) => {
                             tracing::debug!("Sent yazi command: ya {}", args.join(" "));
+                            self.last_yazi_path = Some(path);
                         }
                         Err(e) => {
                             tracing::debug!("Failed to send yazi command: {}", e);

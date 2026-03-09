@@ -696,11 +696,13 @@ fn run_app(
                             .find(|p| p.is_active)
                             .map(|p| p.cwd.clone());
                         if new_active_cwd != prev_active_cwd {
-                            if let Some(cwd) = &new_active_cwd {
-                                state.pending_yazi = Some((
-                                    Instant::now(),
-                                    workspace_manager::app::state::YaziCommand::Reveal(cwd.clone()),
-                                ));
+                            if let Some(ref cwd) = new_active_cwd {
+                                if state.last_yazi_path.as_ref() != Some(cwd) {
+                                    state.pending_yazi = Some((
+                                        Instant::now(),
+                                        workspace_manager::app::state::YaziCommand::Reveal(cwd.clone()),
+                                    ));
+                                }
                             }
                         }
                     }
