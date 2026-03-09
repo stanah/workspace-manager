@@ -178,6 +178,9 @@ pub struct Config {
     /// お気に入りリポジトリ（repo_key のリスト）
     #[serde(default)]
     pub favorite_repos: Vec<String>,
+    /// Yazi連携設定
+    #[serde(default)]
+    pub yazi: YaziConfig,
 }
 
 fn default_use_nerd_font() -> bool {
@@ -204,6 +207,7 @@ impl Default for Config {
             worktree: WorktreeConfig::default(),
             logwatch: LogWatchConfig::default(),
             favorite_repos: Vec::new(),
+            yazi: YaziConfig::default(),
         }
     }
 }
@@ -478,6 +482,30 @@ impl Default for ZellijConfig {
             tab_name_template: "{repo}/{branch}".to_string(),
             ai_command: "claude".to_string(),
             post_select_command: None,
+        }
+    }
+}
+
+/// Yazi連携設定
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaziConfig {
+    /// Yazi連携を有効にするか
+    #[serde(default)]
+    pub enabled: bool,
+    /// 選択変更後のデバウンス時間（ミリ秒）
+    #[serde(default = "default_yazi_debounce_ms")]
+    pub debounce_ms: u64,
+}
+
+fn default_yazi_debounce_ms() -> u64 {
+    200
+}
+
+impl Default for YaziConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            debounce_ms: default_yazi_debounce_ms(),
         }
     }
 }
