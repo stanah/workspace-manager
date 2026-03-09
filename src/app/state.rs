@@ -1340,3 +1340,37 @@ fn normalize_path(path: &str) -> String {
     }
     path.to_string()
 }
+
+#[cfg(test)]
+mod yazi_tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_yazi_command_empty_tree() {
+        let state = AppState::new();
+        assert!(state.resolve_yazi_command().is_none());
+    }
+
+    #[test]
+    fn test_schedule_yazi_no_items() {
+        let mut state = AppState::new();
+        state.schedule_yazi(200);
+        assert!(state.pending_yazi.is_none());
+    }
+
+    #[test]
+    fn test_yazi_timeout_none_when_no_pending() {
+        let state = AppState::new();
+        assert!(state.yazi_timeout().is_none());
+    }
+
+    #[test]
+    fn test_yazi_timeout_returns_duration_when_pending() {
+        let mut state = AppState::new();
+        let deadline = Instant::now() + std::time::Duration::from_millis(500);
+        state.pending_yazi = Some((deadline, YaziCommand::Cd(std::path::PathBuf::from("/tmp"))));
+        let timeout = state.yazi_timeout();
+        assert!(timeout.is_some());
+        assert!(timeout.unwrap() <= std::time::Duration::from_millis(500));
+    }
+}
