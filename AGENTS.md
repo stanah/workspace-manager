@@ -52,7 +52,7 @@ src/
 ├── app/
 │   ├── mod.rs           # Module exports
 │   ├── state.rs         # AppState, ViewMode, TreeItem, ListDisplayMode
-│   ├── config.rs        # Config, ZellijConfig, WorktreeConfig, WorktreePathStyle
+│   ├── config.rs        # Config, ZellijConfig, WorktreeConfig, YaziConfig, WorktreePathStyle
 │   └── events.rs        # Action enum, AppEvent, poll_event, mouse_action
 ├── ui/
 │   ├── mod.rs           # UI render entry, centered_rect utility
@@ -132,6 +132,11 @@ session_name = "main"  # Target session for external mode
 tab_name_template = "{repo}/{branch}"
 ai_command = "claude"  # Command used in layout templates
 # post_select_command = "osascript -e '...'"  # Run after tab switch (e.g., focus pane)
+
+[yazi]
+enabled = true
+debounce_ms = 200  # Selection change debounce (ms)
+client_id = 9090   # yazi --client-id <number> で起動時に指定
 
 [worktree]
 path_style = "Parallel"  # or "Ghq", "Subdirectory", "Custom"
