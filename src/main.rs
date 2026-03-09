@@ -346,6 +346,7 @@ fn run_tui() -> Result<()> {
     state.use_nerd_font = config.use_nerd_font;
     state.tab_name_template = config.effective_multiplexer_config().tab_name_template;
     state.favorite_repos = config.favorite_repos.iter().cloned().collect();
+    let yazi_config = config.yazi.clone();
     let mut mux = multiplexer::create_multiplexer(
         config.multiplexer.as_ref(),
         &config.zellij,
@@ -355,7 +356,7 @@ fn run_tui() -> Result<()> {
     state.scan_workspaces();
     state.rebuild_tree_with_manager(Some(&worktree_manager));
 
-    let result = run_app(&mut terminal, &mut state, &mut *mux, &mut config, &worktree_manager, notify_rx, logwatch_trigger, workspace_watch_tx, &runtime);
+    let result = run_app(&mut terminal, &mut state, &mut *mux, &mut config, &worktree_manager, notify_rx, logwatch_trigger, workspace_watch_tx, &runtime, &yazi_config);
 
     // Clean up socket on exit
     let socket_path = notify::socket_path();
@@ -621,6 +622,7 @@ fn run_app(
     logwatch_trigger: Option<LogWatchTrigger>,
     workspace_watch_tx: Option<tokio::sync::watch::Sender<Vec<String>>>,
     runtime: &tokio::runtime::Runtime,
+    yazi_config: &workspace_manager::app::config::YaziConfig,
 ) -> Result<()> {
     // 起動直後に即座にポーリングするため10から開始
     let mut tick_count = 10u8;
@@ -708,7 +710,17 @@ fn run_app(
 
         // イベントをバッチ処理：溜まったイベントをすべて消化してから次の描画へ
         // 最初のpollだけタイムアウト付き（描画更新間隔）、以降は即座にチェック
-        let mut has_event = poll_event(Duration::from_millis(100))?;
+        let poll_timeout = if yazi_config.enabled {
+            state.yazi_timeout()
+                .map(|d| d.min(Duration::from_millis(100)))
+                .unwrap_or(Duration::from_millis(100))
+        } else {
+            Duration::from_millis(100)
+        };
+        let mut has_event = poll_event(poll_timeout)?;
+        if yazi_config.enabled {
+            state.fire_yazi_if_ready();
+        }
         while let Some(event) = has_event {
             match state.view_mode {
                 ViewMode::Input => {
@@ -723,10 +735,15 @@ fn run_app(
                 }
                 _ => match event {
                     AppEvent::Key(key) => {
+                        let prev_index = state.selected_index;
                         let action = Action::from(key);
                         handle_action(state, mux, config, worktree_manager, action)?;
+                        if yazi_config.enabled && state.selected_index != prev_index {
+                            state.schedule_yazi(yazi_config.debounce_ms);
+                        }
                     }
                     AppEvent::Mouse(mouse) => {
+                        let prev_index = state.selected_index;
                         // header_height = 1 (border only, no header row in Table)
                         let action = mouse_action(mouse, 0, 1);
                         // ダブルクリック検出
@@ -749,6 +766,9 @@ fn run_app(
                             other => other,
                         };
                         handle_action(state, mux, config, worktree_manager, action)?;
+                        if yazi_config.enabled && state.selected_index != prev_index {
+                            state.schedule_yazi(yazi_config.debounce_ms);
+                        }
                     }
                     AppEvent::Resize(_, _) => {}
                     _ => {}
