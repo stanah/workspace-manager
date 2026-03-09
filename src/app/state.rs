@@ -1255,18 +1255,20 @@ impl AppState {
     }
 
     /// Yaziデバウンスタイマーが発火可能か確認し、発火する
-    pub fn fire_yazi_if_ready(&mut self) {
+    pub fn fire_yazi_if_ready(&mut self, client_id: u64) {
         if let Some((deadline, _)) = &self.pending_yazi {
             if Instant::now() >= *deadline {
                 if let Some((_, cmd)) = self.pending_yazi.take() {
                     let args: Vec<String> = match &cmd {
                         YaziCommand::Cd(p) => vec![
-                            "emit".to_string(),
+                            "emit-to".to_string(),
+                            client_id.to_string(),
                             "cd".to_string(),
                             p.to_string_lossy().to_string(),
                         ],
                         YaziCommand::Reveal(p) => vec![
-                            "emit".to_string(),
+                            "emit-to".to_string(),
+                            client_id.to_string(),
                             "reveal".to_string(),
                             p.to_string_lossy().to_string(),
                         ],

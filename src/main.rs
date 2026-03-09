@@ -719,7 +719,7 @@ fn run_app(
         };
         let mut has_event = poll_event(poll_timeout)?;
         if yazi_config.enabled {
-            state.fire_yazi_if_ready();
+            state.fire_yazi_if_ready(yazi_config.client_id);
         }
         while let Some(event) = has_event {
             match state.view_mode {

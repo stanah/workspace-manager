@@ -495,10 +495,17 @@ pub struct YaziConfig {
     /// 選択変更後のデバウンス時間（ミリ秒）
     #[serde(default = "default_yazi_debounce_ms")]
     pub debounce_ms: u64,
+    /// YaziのクライアントID（ya emit-to の宛先。yazi --client-id <数値> で起動時に指定）
+    #[serde(default = "default_yazi_client_id")]
+    pub client_id: u64,
 }
 
 fn default_yazi_debounce_ms() -> u64 {
     200
+}
+
+fn default_yazi_client_id() -> u64 {
+    9090
 }
 
 impl Default for YaziConfig {
@@ -506,6 +513,8 @@ impl Default for YaziConfig {
         Self {
             enabled: false,
             debounce_ms: default_yazi_debounce_ms(),
+            client_id: default_yazi_client_id(),
+
         }
     }
 }
