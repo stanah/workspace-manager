@@ -160,6 +160,48 @@ pub struct AppState {
     pub pending_yazi: Option<(Instant, YaziCommand)>,
     /// Yazi連携: 最後に送信したコマンドのパス（重複送信防止）
     pub last_yazi_path: Option<std::path::PathBuf>,
+    /// Git logペインの表示フラグ
+    pub show_git_log: bool,
+    /// Git logのキャッシュ (project_path, commits)
+    pub git_log_cache: Option<(String, Vec<GitLogEntry>)>,
+    /// Git logのスクロールオフセット
+    pub git_log_scroll: usize,
+    /// Git logペインのレンダリング領域（マウスイベント判定用）
+    pub git_log_area: Option<ratatui::layout::Rect>,
+    /// Git logでフォーカス中のコミットインデックス
+    pub git_log_selected: Option<usize>,
+    /// コミット詳細を表示中かどうか
+    pub git_log_show_detail: bool,
+    /// Git logペインの高さ比率（0.0〜1.0、ワークスペースリスト側の比率）
+    pub git_log_split_ratio: f32,
+    /// ボーダードラッグ中フラグ
+    pub git_log_dragging: bool,
+    /// Git logの再取得が必要フラグ
+    pub git_log_dirty: bool,
+}
+
+/// コミット詳細情報
+#[derive(Debug, Clone)]
+pub struct CommitDetail {
+    pub hash: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub subject: String,
+    pub body: String,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    pub files: Vec<(char, String)>,
+}
+
+/// Git logのエントリ
+#[derive(Debug, Clone)]
+pub struct GitLogEntry {
+    pub oid: git2::Oid,
+    pub short_hash: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub subject: String,
 }
 
 impl AppState {
@@ -191,6 +233,15 @@ impl AppState {
             favorite_repos: HashSet::new(),
             pending_yazi: None,
             last_yazi_path: None,
+            show_git_log: false,
+            git_log_cache: None,
+            git_log_scroll: 0,
+            git_log_area: None,
+            git_log_selected: None,
+            git_log_show_detail: false,
+            git_log_split_ratio: 0.65,
+            git_log_dragging: false,
+            git_log_dirty: false,
         }
     }
 
@@ -261,8 +312,16 @@ impl AppState {
         let mut other_keys: Vec<_> = repo_groups.keys()
             .filter(|k| !self.favorite_repos.contains(k.as_str()))
             .cloned().collect();
-        fav_keys.sort();
-        other_keys.sort();
+        fav_keys.sort_by(|a, b| {
+            let name_a = repo_paths.get(a).map(|p| Self::repo_display_name(p)).unwrap_or_default();
+            let name_b = repo_paths.get(b).map(|p| Self::repo_display_name(p)).unwrap_or_default();
+            name_a.cmp(&name_b)
+        });
+        other_keys.sort_by(|a, b| {
+            let name_a = repo_paths.get(a).map(|p| Self::repo_display_name(p)).unwrap_or_default();
+            let name_b = repo_paths.get(b).map(|p| Self::repo_display_name(p)).unwrap_or_default();
+            name_a.cmp(&name_b)
+        });
 
         let has_favorites = !fav_keys.is_empty();
         let has_others = !other_keys.is_empty();
@@ -1112,6 +1171,189 @@ impl AppState {
             }
             _ => None,
         }
+    }
+
+    /// 選択中ワークスペースのプロジェクトパスを取得
+    pub fn selected_project_path(&self) -> Option<String> {
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::Worktree { workspace_index, .. }) => {
+                self.workspaces.get(*workspace_index).map(|ws| ws.project_path.clone())
+            }
+            Some(TreeItem::Session { session_index, .. }) => {
+                self.sessions.get(*session_index).and_then(|s| {
+                    self.workspaces.get(s.workspace_index).map(|ws| ws.project_path.clone())
+                })
+            }
+            Some(TreeItem::Pane { pane_index, .. }) => {
+                self.panes.get(*pane_index).and_then(|p| {
+                    self.workspaces.get(p.workspace_index).map(|ws| ws.project_path.clone())
+                })
+            }
+            Some(TreeItem::RepoGroup { path, .. }) => Some(path.clone()),
+            Some(TreeItem::Branch { repo_path, .. }) => Some(repo_path.clone()),
+            _ => None,
+        }
+    }
+
+    /// Git logの再取得を予約（軽量、イベント処理中に呼ぶ）
+    pub fn invalidate_git_log(&mut self) {
+        if self.show_git_log {
+            self.git_log_dirty = true;
+        }
+    }
+
+    /// 描画前にdirtyなら実際にフェッチ（メインループの描画直前に呼ぶ）
+    pub fn flush_git_log(&mut self) {
+        if !self.show_git_log || !self.git_log_dirty {
+            return;
+        }
+        self.git_log_dirty = false;
+
+        let path = match self.selected_project_path() {
+            Some(p) => p,
+            None => {
+                self.git_log_cache = None;
+                return;
+            }
+        };
+        // キャッシュが有効ならスキップ
+        if let Some((ref cached_path, _)) = self.git_log_cache {
+            if *cached_path == path {
+                return;
+            }
+        }
+        self.git_log_scroll = 0;
+        let entries = Self::fetch_git_log(&path, 200);
+        self.git_log_selected = if entries.is_empty() { None } else { Some(0) };
+        self.git_log_show_detail = false;
+        self.git_log_cache = Some((path.clone(), entries));
+    }
+
+    /// Git logのフォーカスを上に移動
+    pub fn git_log_move_up(&mut self) {
+        let total = self.git_log_cache.as_ref().map(|(_, e)| e.len()).unwrap_or(0);
+        if total == 0 {
+            return;
+        }
+        let current = self.git_log_selected.unwrap_or(0);
+        let new = current.saturating_sub(1);
+        self.git_log_selected = Some(new);
+        self.git_log_ensure_visible();
+    }
+
+    /// Git logのフォーカスを下に移動
+    pub fn git_log_move_down(&mut self) {
+        let total = self.git_log_cache.as_ref().map(|(_, e)| e.len()).unwrap_or(0);
+        if total == 0 {
+            return;
+        }
+        let current = self.git_log_selected.unwrap_or(0);
+        let new = (current + 1).min(total.saturating_sub(1));
+        self.git_log_selected = Some(new);
+        self.git_log_ensure_visible();
+    }
+
+    /// 選択中のコミットが表示範囲内に入るようスクロールを調整
+    fn git_log_ensure_visible(&mut self) {
+        let selected = match self.git_log_selected {
+            Some(s) => s,
+            None => return,
+        };
+        let visible = self
+            .git_log_area
+            .map(|a| a.height.saturating_sub(2) as usize)
+            .unwrap_or(10);
+        if selected < self.git_log_scroll {
+            self.git_log_scroll = selected;
+        } else if selected >= self.git_log_scroll + visible {
+            self.git_log_scroll = selected - visible + 1;
+        }
+    }
+
+    /// git2を使ってgit logを取得
+    fn fetch_git_log(project_path: &str, max_count: usize) -> Vec<GitLogEntry> {
+        let repo = match git2::Repository::open(project_path) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let mut revwalk = match repo.revwalk() {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        if revwalk.push_head().is_err() {
+            return Vec::new();
+        }
+        revwalk.set_sorting(git2::Sort::TIME).ok();
+
+        let mut entries = Vec::new();
+        for oid in revwalk.take(max_count).flatten() {
+            if let Ok(commit) = repo.find_commit(oid) {
+                let short_hash = format!("{:.7}", oid);
+                let author = commit.author().name().unwrap_or("").to_string();
+                let timestamp = commit.time().seconds();
+                let subject = commit.summary().unwrap_or("").to_string();
+                entries.push(GitLogEntry {
+                    oid,
+                    short_hash,
+                    author,
+                    timestamp,
+                    subject,
+                });
+            }
+        }
+        entries
+    }
+
+    /// 選択中のコミットの詳細（diff stat）を取得
+    pub fn selected_commit_detail(&self) -> Option<CommitDetail> {
+        let idx = self.git_log_selected?;
+        let (ref path, ref entries) = self.git_log_cache.as_ref()?;
+        let entry = entries.get(idx)?;
+
+        let repo = git2::Repository::open(path).ok()?;
+        let commit = repo.find_commit(entry.oid).ok()?;
+        let tree = commit.tree().ok()?;
+        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+        let diff = repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+            .ok()?;
+        let stats = diff.stats().ok()?;
+
+        let mut files = Vec::new();
+        for i in 0..diff.deltas().len() {
+            if let Some(delta) = diff.deltas().nth(i) {
+                let path = delta
+                    .new_file()
+                    .path()
+                    .or_else(|| delta.old_file().path())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let status = match delta.status() {
+                    git2::Delta::Added => 'A',
+                    git2::Delta::Deleted => 'D',
+                    git2::Delta::Modified => 'M',
+                    git2::Delta::Renamed => 'R',
+                    git2::Delta::Copied => 'C',
+                    _ => '?',
+                };
+                files.push((status, path));
+            }
+        }
+
+        let body = commit.message().unwrap_or("").to_string();
+
+        Some(CommitDetail {
+            hash: format!("{}", entry.oid),
+            author: entry.author.clone(),
+            timestamp: entry.timestamp,
+            subject: entry.subject.clone(),
+            body,
+            files_changed: stats.files_changed(),
+            insertions: stats.insertions(),
+            deletions: stats.deletions(),
+            files,
+        })
     }
 
     /// 新規worktree作成ダイアログを開く

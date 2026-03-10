@@ -110,6 +110,12 @@ pub enum Action {
     ToggleFavorite,
     /// お気に入り以外を折りたたむ/展開する
     CollapseNonFavorites,
+    /// Git logペイン表示切替
+    ToggleGitLog,
+    /// Git logを上スクロール
+    GitLogScrollUp,
+    /// Git logを下スクロール
+    GitLogScrollDown,
     /// 何もしない
     None,
 }
@@ -140,6 +146,9 @@ impl From<KeyEvent> for Action {
             // 終了
             (KeyCode::Char('q'), _) => Action::Quit,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
+            // Git log スクロール（Ctrl+修飾子は先にマッチさせる）
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::GitLogScrollUp,
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => Action::GitLogScrollDown,
             // Worktree管理
             (KeyCode::Char('c'), _) | (KeyCode::Char('a'), _) => Action::CreateWorktree,
             (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => Action::DeleteWorktree,
@@ -158,6 +167,8 @@ impl From<KeyEvent> for Action {
             // お気に入り
             (KeyCode::Char('f'), _) => Action::ToggleFavorite,
             (KeyCode::Char('F'), _) => Action::CollapseNonFavorites,
+            // Git log
+            (KeyCode::Char('L'), _) => Action::ToggleGitLog,
             // その他
             _ => Action::None,
         }

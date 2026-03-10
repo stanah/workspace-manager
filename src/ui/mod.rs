@@ -1,4 +1,5 @@
 pub mod detail_view;
+pub mod git_log;
 pub mod help_view;
 pub mod input_dialog;
 pub mod selection_dialog;
@@ -36,10 +37,24 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
 
-    // ワークスペース一覧（全面表示）
-    workspace_list::render(frame, area, state);
+    if state.show_git_log {
+        let top_pct = (state.git_log_split_ratio * 100.0) as u16;
+        let chunks = Layout::vertical([
+            Constraint::Percentage(top_pct),
+            Constraint::Percentage(100 - top_pct),
+        ])
+        .split(area);
 
-    // オーバーレイ
+        workspace_list::render(frame, chunks[0], state);
+        state.git_log_area = Some(chunks[1]);
+        git_log::render(frame, chunks[1], state);
+    } else {
+        // 全面表示
+        state.git_log_area = None;
+        workspace_list::render(frame, area, state);
+    }
+
+    // オーバーレイ（全画面に対して表示）
     match &state.view_mode {
         ViewMode::Help => {
             help_view::render(frame, area);

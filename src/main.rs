@@ -723,6 +723,9 @@ fn run_app(
         }
         tick_count += 1;
 
+        // 描画前にdirtyなgit logをフェッチ（イベントバッチ後に1回だけ）
+        state.flush_git_log();
+
         terminal.draw(|frame| {
             ui::render(frame, state);
         })?;
@@ -761,31 +764,100 @@ fn run_app(
                         }
                     }
                     AppEvent::Mouse(mouse) => {
-                        // header_height = 1 (border only, no header row in Table)
-                        let action = mouse_action(mouse, 0, 1);
-                        // ダブルクリック検出
-                        let action = match action {
-                            Action::MouseSelect(row) => {
-                                let now = Instant::now();
-                                let is_double_click = last_click
-                                    .map(|(time, prev_row)| {
-                                        now.duration_since(time) < DOUBLE_CLICK_THRESHOLD
-                                            && prev_row == row
-                                    })
-                                    .unwrap_or(false);
-                                last_click = Some((now, row));
-                                if is_double_click {
-                                    Action::MouseDoubleClick(row)
-                                } else {
-                                    Action::MouseSelect(row)
+                        // ボーダードラッグ処理
+                        let on_border = state.show_git_log && state.git_log_area
+                            .map(|area| mouse.row == area.y)
+                            .unwrap_or(false);
+
+                        if state.git_log_dragging {
+                            match mouse.kind {
+                                crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left)
+                                | crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                                    let total_h = terminal.size()?.height as f32;
+                                    if total_h > 0.0 {
+                                        let ratio = mouse.row as f32 / total_h;
+                                        state.git_log_split_ratio = ratio.clamp(0.2, 0.9);
+                                    }
                                 }
+                                crossterm::event::MouseEventKind::Up(_) => {
+                                    state.git_log_dragging = false;
+                                }
+                                _ => {}
                             }
-                            other => other,
-                        };
-                        handle_action(state, mux, config, worktree_manager, action)?;
-                        if yazi_config.enabled {
-                            state.schedule_yazi(yazi_config.debounce_ms);
+                            // ドラッグ中は他のマウス処理をスキップ
+                        } else if on_border && matches!(mouse.kind, crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)) {
+                            state.git_log_dragging = true;
+                        } else {
+
+                        // Git logペイン内のマウスイベントかどうか判定
+                        let in_git_log = state.git_log_area
+                            .map(|area| {
+                                mouse.row >= area.y
+                                    && mouse.row < area.y + area.height
+                                    && mouse.column >= area.x
+                                    && mouse.column < area.x + area.width
+                            })
+                            .unwrap_or(false);
+
+                        if in_git_log {
+                            match mouse.kind {
+                                crossterm::event::MouseEventKind::ScrollUp => {
+                                    state.git_log_show_detail = false;
+                                    state.git_log_move_up();
+                                }
+                                crossterm::event::MouseEventKind::ScrollDown => {
+                                    state.git_log_show_detail = false;
+                                    state.git_log_move_down();
+                                }
+                                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                                    if let Some(area) = state.git_log_area {
+                                        let row_in_pane = (mouse.row - area.y).saturating_sub(1) as usize;
+                                        let entry_index = state.git_log_scroll + row_in_pane;
+                                        let total = state.git_log_cache.as_ref().map(|(_, e)| e.len()).unwrap_or(0);
+                                        if entry_index < total {
+                                            // 同じコミットをクリック → 詳細トグル
+                                            if state.git_log_selected == Some(entry_index) {
+                                                state.git_log_show_detail = !state.git_log_show_detail;
+                                            } else {
+                                                state.git_log_selected = Some(entry_index);
+                                                state.git_log_show_detail = false;
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            // git log外クリックでコミット詳細を閉じる
+                            state.git_log_show_detail = false;
+                            // header_height = 1 (border only, no header row in Table)
+                            let action = mouse_action(mouse, 0, 1);
+                            // ダブルクリック検出
+                            let action = match action {
+                                Action::MouseSelect(row) => {
+                                    let now = Instant::now();
+                                    let is_double_click = last_click
+                                        .map(|(time, prev_row)| {
+                                            now.duration_since(time) < DOUBLE_CLICK_THRESHOLD
+                                                && prev_row == row
+                                        })
+                                        .unwrap_or(false);
+                                    last_click = Some((now, row));
+                                    if is_double_click {
+                                        Action::MouseDoubleClick(row)
+                                    } else {
+                                        Action::MouseSelect(row)
+                                    }
+                                }
+                                other => other,
+                            };
+                            handle_action(state, mux, config, worktree_manager, action)?;
+                            if yazi_config.enabled {
+                                state.schedule_yazi(yazi_config.debounce_ms);
+                            }
                         }
+
+                        } // else (not dragging, not on border)
                     }
                     AppEvent::Resize(_, _) => {}
                     _ => {}
@@ -1225,9 +1297,11 @@ fn handle_action(
         }
         Action::MoveUp => {
             state.move_up();
+            state.invalidate_git_log();
         }
         Action::MoveDown => {
             state.move_down();
+            state.invalidate_git_log();
         }
         Action::ToggleHelp => {
             state.toggle_help();
@@ -1236,6 +1310,11 @@ fn handle_action(
             if state.view_mode != ViewMode::List {
                 state.view_mode = ViewMode::List;
                 state.input_dialog = None;
+            } else if state.git_log_show_detail {
+                state.git_log_show_detail = false;
+            } else if state.show_git_log {
+                state.show_git_log = false;
+                state.git_log_selected = None;
             }
         }
         Action::Refresh => {
@@ -1426,6 +1505,32 @@ fn handle_action(
             state.toggle_collapse_non_favorites();
             state.rebuild_tree_with_manager(Some(_worktree_manager));
         }
+        Action::ToggleGitLog => {
+            state.show_git_log = !state.show_git_log;
+            if state.show_git_log {
+                state.git_log_cache = None;
+                state.git_log_dirty = true;
+            } else {
+                state.git_log_selected = None;
+                state.git_log_show_detail = false;
+            }
+        }
+        Action::GitLogScrollUp => {
+            if state.show_git_log {
+                state.git_log_show_detail = false;
+                for _ in 0..5 {
+                    state.git_log_move_up();
+                }
+            }
+        }
+        Action::GitLogScrollDown => {
+            if state.show_git_log {
+                state.git_log_show_detail = false;
+                for _ in 0..5 {
+                    state.git_log_move_down();
+                }
+            }
+        }
         Action::CreateWorktree => {
             // ブランチが選択されている場合は即座にworktree作成
             if let Some((branch_name, _is_local, repo_path)) = state.selected_branch_info() {
@@ -1597,6 +1702,7 @@ fn handle_action(
             let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
+                state.invalidate_git_log();
                 // ペイン行クリックでそのペインにフォーカス
                 if state.selected_pane().is_some() {
                     handle_action(state, mux, config, _worktree_manager, Action::Select)?;
@@ -1607,6 +1713,7 @@ fn handle_action(
             let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
+                state.invalidate_git_log();
             }
             handle_action(state, mux, config, _worktree_manager, Action::Select)?;
         }
@@ -1619,9 +1726,11 @@ fn handle_action(
         }
         Action::ScrollUp => {
             state.move_up();
+            state.invalidate_git_log();
         }
         Action::ScrollDown => {
             state.move_down();
+            state.invalidate_git_log();
         }
         Action::None => {}
     }

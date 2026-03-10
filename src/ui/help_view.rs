@@ -109,6 +109,14 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("  Open in editor"),
         ]),
         Line::from(vec![
+            Span::styled("  L    ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Toggle git log pane"),
+        ]),
+        Line::from(vec![
+            Span::styled("  C-u/d", Style::default().fg(Color::Yellow)),
+            Span::raw("  Scroll git log up/down"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?    ", Style::default().fg(Color::Yellow)),
             Span::raw("  Toggle this help"),
         ]),
