@@ -54,8 +54,8 @@ pub enum Action {
     MoveDown,
     /// 選択（フォーカス）
     Select,
-    /// レイアウトを選択して開く（Cmd+Enter / Ctrl+Shift+Enter）
-    SelectWithLayout,
+    /// フォーカスペイン切り替え
+    SwitchFocus,
     /// 展開/折りたたみ切り替え
     ToggleExpand,
     /// 戻る/閉じる
@@ -129,8 +129,8 @@ impl From<KeyEvent> for Action {
             // 展開/折りたたみ（左右キー）
             (KeyCode::Left, _) => Action::Collapse,
             (KeyCode::Right, _) => Action::Expand,
-            // レイアウト選択して開く (Tab)
-            (KeyCode::Tab, _) => Action::SelectWithLayout,
+            // フォーカス切り替え (Tab)
+            (KeyCode::Tab, _) => Action::SwitchFocus,
             // 選択
             (KeyCode::Enter, _) => Action::Select,
             // 展開/折りたたみ

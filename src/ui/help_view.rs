@@ -113,6 +113,10 @@ pub fn render(frame: &mut Frame, area: Rect) {
             Span::raw("  Toggle git log pane"),
         ]),
         Line::from(vec![
+            Span::styled("  Tab  ", Style::default().fg(Color::Yellow)),
+            Span::raw("  Switch focus (workspace / git log)"),
+        ]),
+        Line::from(vec![
             Span::styled("  C-u/d", Style::default().fg(Color::Yellow)),
             Span::raw("  Scroll git log up/down"),
         ]),

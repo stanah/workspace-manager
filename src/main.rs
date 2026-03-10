@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use workspace_manager::app::{Action, AppEvent, AppState, Config, mouse_action, poll_event, ViewMode};
+use workspace_manager::app::{Action, AppEvent, AppState, Config, FocusedPane, mouse_action, poll_event, ViewMode};
 use workspace_manager::logwatch::{ClaudeProcessInfo, ClaudeSession, ClaudeSessionsFetcher, KiroSqliteConfig, KiroSqliteFetcher, StatusState};
 use workspace_manager::workspace::SessionStatus;
 use workspace_manager::multiplexer::{self, Multiplexer, WindowActionResult};
@@ -800,13 +800,12 @@ fn run_app(
                             .unwrap_or(false);
 
                         if in_git_log {
+                            state.focused_pane = FocusedPane::GitLog;
                             match mouse.kind {
                                 crossterm::event::MouseEventKind::ScrollUp => {
-                                    state.git_log_show_detail = false;
                                     state.git_log_move_up();
                                 }
                                 crossterm::event::MouseEventKind::ScrollDown => {
-                                    state.git_log_show_detail = false;
                                     state.git_log_move_down();
                                 }
                                 crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
@@ -828,7 +827,8 @@ fn run_app(
                                 _ => {}
                             }
                         } else {
-                            // git log外クリックでコミット詳細を閉じる
+                            // git log外クリックでフォーカスをワークスペースに戻す
+                            state.focused_pane = FocusedPane::WorkspaceList;
                             state.git_log_show_detail = false;
                             // header_height = 1 (border only, no header row in Table)
                             let action = mouse_action(mouse, 0, 1);
@@ -1296,12 +1296,22 @@ fn handle_action(
             state.should_quit = true;
         }
         Action::MoveUp => {
-            state.move_up();
-            state.invalidate_git_log();
+            if state.focused_pane == FocusedPane::GitLog && state.show_git_log {
+                state.git_log_move_up();
+                state.git_log_show_detail = true;
+            } else {
+                state.move_up();
+                state.invalidate_git_log();
+            }
         }
         Action::MoveDown => {
-            state.move_down();
-            state.invalidate_git_log();
+            if state.focused_pane == FocusedPane::GitLog && state.show_git_log {
+                state.git_log_move_down();
+                state.git_log_show_detail = true;
+            } else {
+                state.move_down();
+                state.invalidate_git_log();
+            }
         }
         Action::ToggleHelp => {
             state.toggle_help();
@@ -1310,11 +1320,14 @@ fn handle_action(
             if state.view_mode != ViewMode::List {
                 state.view_mode = ViewMode::List;
                 state.input_dialog = None;
-            } else if state.git_log_show_detail {
+            } else if state.focused_pane == FocusedPane::GitLog {
+                // git logフォーカス → ワークスペースに戻す
+                state.focused_pane = FocusedPane::WorkspaceList;
                 state.git_log_show_detail = false;
             } else if state.show_git_log {
                 state.show_git_log = false;
                 state.git_log_selected = None;
+                state.git_log_show_detail = false;
             }
         }
         Action::Refresh => {
@@ -1412,50 +1425,21 @@ fn handle_action(
                 }
             }
         }
-        Action::SelectWithLayout => {
-            if let Some(ws) = state.selected_workspace() {
-                if mux.is_available() {
-                    let context = SelectionContext {
-                        workspace_path: ws.project_path.clone(),
-                        repo_name: ws.repo_name.clone(),
-                        branch_name: ws.branch.clone(),
-                    };
-
-                    if mux.session_name().is_none() && !mux.is_internal() {
-                        match mux.list_sessions() {
-                            Ok(sessions) if !sessions.is_empty() => {
-                                state.open_session_select_dialog(sessions, context);
-                            }
-                            Ok(_) => {
-                                state.status_message = Some("No sessions found".to_string());
-                            }
-                            Err(e) => {
-                                state.status_message = Some(format!("Failed to list sessions: {}", e));
-                            }
+        Action::SwitchFocus => {
+            if state.show_git_log {
+                state.focused_pane = match state.focused_pane {
+                    FocusedPane::WorkspaceList => {
+                        // git logにフォーカスして詳細も表示
+                        if state.git_log_selected.is_some() {
+                            state.git_log_show_detail = true;
                         }
-                    } else {
-                        let layout_dir = config.effective_layout_dir()
-                            .unwrap_or_else(|| {
-                                directories::BaseDirs::new()
-                                    .map(|d| d.home_dir().join(".config/workspace-manager/layouts"))
-                                    .unwrap_or_else(|| Path::new("~/.config/workspace-manager/layouts").to_path_buf())
-                            });
-
-                        match mux.list_layouts(&layout_dir) {
-                            Ok(layouts) if !layouts.is_empty() => {
-                                state.open_layout_select_dialog(layouts, context);
-                            }
-                            Ok(_) => {
-                                state.status_message = Some("No layouts found".to_string());
-                            }
-                            Err(e) => {
-                                state.status_message = Some(format!("Failed to list layouts: {}", e));
-                            }
-                        }
+                        FocusedPane::GitLog
                     }
-                } else {
-                    state.status_message = Some("Multiplexer integration disabled".to_string());
-                }
+                    FocusedPane::GitLog => {
+                        state.git_log_show_detail = false;
+                        FocusedPane::WorkspaceList
+                    }
+                };
             }
         }
         Action::ToggleExpand => {
@@ -1513,11 +1497,11 @@ fn handle_action(
             } else {
                 state.git_log_selected = None;
                 state.git_log_show_detail = false;
+                state.focused_pane = FocusedPane::WorkspaceList;
             }
         }
         Action::GitLogScrollUp => {
             if state.show_git_log {
-                state.git_log_show_detail = false;
                 for _ in 0..5 {
                     state.git_log_move_up();
                 }
@@ -1525,7 +1509,6 @@ fn handle_action(
         }
         Action::GitLogScrollDown => {
             if state.show_git_log {
-                state.git_log_show_detail = false;
                 for _ in 0..5 {
                     state.git_log_move_down();
                 }

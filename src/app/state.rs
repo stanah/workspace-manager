@@ -54,6 +54,14 @@ impl ListDisplayMode {
     }
 }
 
+/// フォーカスされているペイン
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusedPane {
+    #[default]
+    WorkspaceList,
+    GitLog,
+}
+
 /// Yaziに送信するコマンド
 #[derive(Debug, Clone)]
 pub enum YaziCommand {
@@ -178,6 +186,8 @@ pub struct AppState {
     pub git_log_dragging: bool,
     /// Git logの再取得が必要フラグ
     pub git_log_dirty: bool,
+    /// フォーカスされているペイン
+    pub focused_pane: FocusedPane,
 }
 
 /// コミット詳細情報
@@ -242,6 +252,7 @@ impl AppState {
             git_log_split_ratio: 0.65,
             git_log_dragging: false,
             git_log_dirty: false,
+            focused_pane: FocusedPane::default(),
         }
     }
 

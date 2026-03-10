@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, ListDisplayMode, TreeItem};
+use crate::app::{AppState, FocusedPane, ListDisplayMode, TreeItem};
 
 /// ワークスペース一覧をツリー形式で描画
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -43,12 +43,17 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
     let widths = [Constraint::Min(10)];
 
+    let border_color = if state.focused_pane == FocusedPane::WorkspaceList {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let table = Table::new(rows, widths)
         .block(
             Block::default()
                 .title(" Workspaces ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(border_color)),
         )
         .row_highlight_style(
             Style::default()

@@ -1,13 +1,13 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::app::{AppState, CommitDetail};
+use crate::app::{AppState, CommitDetail, FocusedPane};
 
 /// UNIXタイムスタンプを相対時間文字列に変換
 fn relative_time(timestamp: i64) -> String {
@@ -45,8 +45,27 @@ fn relative_time(timestamp: i64) -> String {
     }
 }
 
-/// Git logペインを描画
+/// Git logペイン全体を描画（詳細表示時は左右分割）
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+    if state.git_log_show_detail {
+        // 上下分割: git log (40%) | commit detail (60%)
+        let chunks = Layout::vertical([
+            Constraint::Percentage(40),
+            Constraint::Percentage(60),
+        ])
+        .split(area);
+
+        render_log_list(frame, chunks[0], state);
+        if let Some(detail) = state.selected_commit_detail() {
+            render_commit_detail(frame, chunks[1], &detail);
+        }
+    } else {
+        render_log_list(frame, area, state);
+    }
+}
+
+/// Git logリスト部分を描画
+fn render_log_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let title = match state.selected_workspace_branch() {
         Some(branch) => format!(" Git Log ({branch}) "),
         None => " Git Log ".to_string(),
@@ -87,7 +106,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             } else {
                 Style::default()
             };
-            // hash - message (xx min ago) <author>
             Line::from(vec![
                 Span::styled(
                     &entry.short_hash,
@@ -114,35 +132,36 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         String::new()
     };
 
+    let border_color = if state.focused_pane == FocusedPane::GitLog {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let paragraph = Paragraph::new(lines).block(
         Block::default()
             .title(title)
             .title_bottom(Line::from(pos_info).right_aligned())
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_style(Style::default().fg(border_color)),
     );
 
     frame.render_widget(paragraph, area);
-
-    // コミット詳細をオーバーレイ表示（Enter/ダブルクリックで開く）
-    if state.git_log_show_detail {
-        if let Some(detail) = state.selected_commit_detail() {
-            render_commit_detail(frame, frame.area(), &detail);
-        }
-    }
 }
 
-/// コミット詳細オーバーレイを描画
+/// コミット詳細ペインを描画
 fn render_commit_detail(frame: &mut Frame, area: Rect, detail: &CommitDetail) {
-    // 中央にポップアップ
-    let popup_area = centered_rect_abs(area, 80, 70);
-    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Commit Detail ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let inner = Layout::vertical([
-        Constraint::Length(6), // ヘッダー情報
-        Constraint::Min(1),   // ファイル一覧
+    let chunks = Layout::vertical([
+        Constraint::Length(6),
+        Constraint::Min(1),
     ])
-    .split(Block::default().borders(Borders::ALL).inner(popup_area));
+    .split(inner);
 
     let rel = relative_time(detail.timestamp);
     let header_lines = vec![
@@ -152,7 +171,10 @@ fn render_commit_detail(frame: &mut Frame, area: Rect, detail: &CommitDetail) {
         ]),
         Line::from(vec![
             Span::styled("Author: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&detail.author, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &detail.author,
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("  ({rel})"), Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
@@ -178,7 +200,7 @@ fn render_commit_detail(frame: &mut Frame, area: Rect, detail: &CommitDetail) {
     ];
 
     let header = Paragraph::new(header_lines);
-    frame.render_widget(header, inner[0]);
+    frame.render_widget(header, chunks[0]);
 
     let file_lines: Vec<Line> = detail
         .files
@@ -192,29 +214,15 @@ fn render_commit_detail(frame: &mut Frame, area: Rect, detail: &CommitDetail) {
                 _ => Color::White,
             };
             Line::from(vec![
-                Span::styled(format!(" {status} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {status} "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(path),
             ])
         })
         .collect();
 
     let files = Paragraph::new(file_lines).wrap(Wrap { trim: true });
-    frame.render_widget(files, inner[1]);
-
-    // 外枠
-    let block = Block::default()
-        .title(" Commit Detail (click elsewhere to close) ")
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    frame.render_widget(block, popup_area);
-}
-
-/// 絶対サイズ指定の中央配置Rect
-fn centered_rect_abs(area: Rect, max_width: u16, max_height_pct: u16) -> Rect {
-    let height = (area.height as u32 * max_height_pct as u32 / 100) as u16;
-    let width = max_width.min(area.width.saturating_sub(4));
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height)
+    frame.render_widget(files, chunks[1]);
 }
