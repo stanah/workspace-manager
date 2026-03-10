@@ -93,9 +93,6 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
             if let Some(ws) = state.workspaces.get(*workspace_index) {
                 let is_open = state.is_workspace_open(&ws.repo_name, &ws.branch);
 
-                // ブランチアイコン
-                let branch_icon = if state.use_nerd_font { "\u{E0A0} " } else { "⎇ " };
-
                 // ブランチ名のスタイル：開いていれば緑、選択中は太字、下線で区別
                 let name_style = match (is_selected, is_open) {
                     (true, true) => Style::default()
@@ -110,7 +107,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
 
                 let spans = vec![
                     Span::styled(" ", Style::default()),
-                    Span::styled(format!("{}({})", branch_icon, ws.branch), name_style),
+                    Span::styled(format!("({})", ws.branch), name_style),
                 ];
 
                 Row::new(vec![Line::from(spans)]).height(1)
