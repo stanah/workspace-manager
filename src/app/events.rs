@@ -108,6 +108,8 @@ pub enum Action {
     ClearFilter,
     /// お気に入りトグル
     ToggleFavorite,
+    /// お気に入り以外を折りたたむ/展開する
+    CollapseNonFavorites,
     /// 何もしない
     None,
 }
@@ -155,6 +157,7 @@ impl From<KeyEvent> for Action {
             (KeyCode::Char('/'), _) => Action::FilterBranches,
             // お気に入り
             (KeyCode::Char('f'), _) => Action::ToggleFavorite,
+            (KeyCode::Char('F'), _) => Action::CollapseNonFavorites,
             // その他
             _ => Action::None,
         }

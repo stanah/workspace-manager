@@ -1422,6 +1422,10 @@ fn handle_action(
                 });
             }
         }
+        Action::CollapseNonFavorites => {
+            state.toggle_collapse_non_favorites();
+            state.rebuild_tree_with_manager(Some(_worktree_manager));
+        }
         Action::CreateWorktree => {
             // ブランチが選択されている場合は即座にworktree作成
             if let Some((branch_name, _is_local, repo_path)) = state.selected_branch_info() {

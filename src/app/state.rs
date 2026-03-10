@@ -281,12 +281,8 @@ impl AppState {
             let is_expanded = !self.collapsed_repos.contains(&repo_key);
             let repo_path = repo_paths.get(&repo_key).cloned().unwrap_or_default();
 
-            // リポジトリ名を取得
-            let repo_name = indices
-                .first()
-                .and_then(|&idx| self.workspaces.get(idx))
-                .map(|ws| ws.repo_name.clone())
-                .unwrap_or_else(|| "unknown".to_string());
+            // リポジトリ名を取得（アカウント名/組織名付き）
+            let repo_name = Self::repo_display_name(&repo_path);
 
             // 既存worktreeのブランチ名を収集
             let existing_branches: HashSet<String> = indices
@@ -436,6 +432,28 @@ impl AppState {
                     }
                 }
             }
+        }
+    }
+
+    /// プロジェクトパスからアカウント名/リポジトリ名の表示名を生成
+    /// 例: /Users/stanah/work/github.com/stanah/config -> stanah/config
+    fn repo_display_name(project_path: &str) -> String {
+        let path = std::path::Path::new(project_path);
+        let components: Vec<&str> = path
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        if components.len() >= 2 {
+            format!(
+                "{}/{}",
+                components[components.len() - 2],
+                components[components.len() - 1]
+            )
+        } else {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
         }
     }
 
@@ -804,6 +822,34 @@ impl AppState {
             self.favorite_repos.remove(repo_key);
         } else {
             self.favorite_repos.insert(repo_key.to_string());
+        }
+    }
+
+    /// お気に入り以外を折りたたむ/展開するトグル
+    pub fn toggle_collapse_non_favorites(&mut self) {
+        // 非お気に入りリポジトリのキー一覧を収集
+        let non_fav_keys: Vec<String> = self.tree_items.iter().filter_map(|item| {
+            if let TreeItem::RepoGroup { path, .. } = item {
+                if !self.favorite_repos.contains(path.as_str()) {
+                    return Some(path.clone());
+                }
+            }
+            None
+        }).collect();
+
+        // すべて折りたたまれているか確認
+        let all_collapsed = non_fav_keys.iter().all(|k| self.collapsed_repos.contains(k));
+
+        if all_collapsed {
+            // すべて展開
+            for key in &non_fav_keys {
+                self.collapsed_repos.remove(key);
+            }
+        } else {
+            // すべて折りたたむ
+            for key in non_fav_keys {
+                self.collapsed_repos.insert(key);
+            }
         }
     }
 

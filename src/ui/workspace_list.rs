@@ -64,14 +64,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         TreeItem::RepoGroup {
             name,
             path,
-            worktree_count,
             ..
         } => {
             // リポジトリグループ行
             let name_style = Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
-            let count_style = Style::default().fg(Color::DarkGray);
             let is_favorite = state.favorite_repos.contains(path);
 
             let mut spans = Vec::new();
@@ -79,7 +77,6 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 spans.push(Span::styled("★ ", Style::default().fg(Color::Yellow)));
             }
             spans.push(Span::styled(name.clone(), name_style));
-            spans.push(Span::styled(format!(" ({})", worktree_count), count_style));
 
             Row::new(vec![Line::from(spans)]).height(1)
         }
@@ -106,26 +103,10 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     (false, false) => Style::default(),
                 };
 
-                // ペイン数またはセッション数を表示
-                let pane_count = state.panes_for_workspace(*workspace_index).len();
-                let session_count = state.sessions_for_workspace(*workspace_index).len();
-                let child_info = if pane_count > 0 {
-                    Some(format!(" [{} pane{}]", pane_count, if pane_count > 1 { "s" } else { "" }))
-                } else if session_count > 0 {
-                    Some(format!(" [{} session{}]", session_count, if session_count > 1 { "s" } else { "" }))
-                } else {
-                    None
-                };
-
-                let mut spans = vec![
+                let spans = vec![
                     Span::styled(" ", Style::default()),
                     Span::styled(format!("{}({})", branch_icon, ws.branch), name_style),
                 ];
-
-                // セッション数/ペイン数を追加
-                if let Some(info) = child_info {
-                    spans.push(Span::styled(info, Style::default().fg(Color::DarkGray)));
-                }
 
                 Row::new(vec![Line::from(spans)]).height(1)
             } else {
