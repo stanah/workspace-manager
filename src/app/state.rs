@@ -668,6 +668,7 @@ impl AppState {
                 workspace_index,
                 window_name: info.window_name.clone(),
                 window_index: info.window_index,
+                pane_index: info.pane_index,
                 cwd: info.cwd.clone(),
                 command: info.command.clone(),
                 is_active: info.is_active,

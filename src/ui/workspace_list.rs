@@ -1,8 +1,8 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Rect},
+    layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Paragraph, Row, Table},
     Frame,
 };
 
@@ -41,8 +41,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .map(|(idx, item)| create_tree_row(item, state, idx == state.selected_index))
         .collect();
 
-    // 2カラム: メインコンテンツ + 右端のペインID
-    let widths = [Constraint::Min(10), Constraint::Length(4)];
+    let widths = [Constraint::Min(10)];
 
     let table = Table::new(rows, widths)
         .block(
@@ -70,7 +69,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
         } => {
             // リポジトリグループ行
             let name_style = Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD);
             let count_style = Style::default().fg(Color::DarkGray);
             let is_favorite = state.favorite_repos.contains(path);
@@ -99,14 +98,12 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                 let name_style = match (is_selected, is_open) {
                     (true, true) => Style::default()
                         .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                        .add_modifier(Modifier::BOLD),
                     (true, false) => Style::default()
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                        .add_modifier(Modifier::BOLD),
                     (false, true) => Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::UNDERLINED),
-                    (false, false) => Style::default()
-                        .add_modifier(Modifier::UNDERLINED),
+                        .fg(Color::Green),
+                    (false, false) => Style::default(),
                 };
 
                 // ペイン数またはセッション数を表示
@@ -122,7 +119,7 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
 
                 let mut spans = vec![
                     Span::styled(" ", Style::default()),
-                    Span::styled(format!("{}{}", branch_icon, ws.branch), name_style),
+                    Span::styled(format!("{}({})", branch_icon, ws.branch), name_style),
                 ];
 
                 // セッション数/ペイン数を追加
@@ -234,10 +231,15 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     Style::default()
                 };
 
-                let pane_id_cell = Cell::from(
-                    Line::from(Span::styled(pane.pane_id.clone(), Style::default().fg(Color::DarkGray)))
-                        .alignment(Alignment::Right),
-                );
+                let pane_target = format!("[{}.{}]", pane.window_index, pane.pane_index);
+
+                let name_style = if pane.is_active {
+                    Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
+                } else if is_selected {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
 
                 if pane.is_ai_pane() {
                     // AI ペイン: ツールアイコンとステータスを表示
@@ -248,38 +250,20 @@ fn create_tree_row(item: &TreeItem, state: &AppState, is_selected: bool) -> Row<
                     let status_icon = ai.status.icon();
                     let info = pane.display_info();
 
-                    let name_style = if pane.is_active {
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
-                    } else if is_selected {
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Gray)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-
-                    let main_cell = Cell::from(Line::from(vec![
+                    Row::new(vec![Line::from(vec![
                         Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{} ", pane_target), name_style),
                         Span::styled(format!("{} ", tool_icon), Style::default().fg(tool_color)),
                         Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
                         Span::styled(info, name_style),
-                    ]));
-
-                    Row::new(vec![main_cell, pane_id_cell]).height(1).style(row_style)
+                    ])]).height(1).style(row_style)
                 } else {
                     // 通常ペイン: コマンド名
-                    let name_style = if pane.is_active {
-                        Style::default().add_modifier(Modifier::BOLD).fg(Color::White)
-                    } else if is_selected {
-                        Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-
-                    let main_cell = Cell::from(Line::from(vec![
+                    Row::new(vec![Line::from(vec![
                         Span::styled(branch_char, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{} ", pane_target), name_style),
                         Span::styled(pane.command.clone(), name_style),
-                    ]));
-
-                    Row::new(vec![main_cell, pane_id_cell]).height(1).style(row_style)
+                    ])]).height(1).style(row_style)
                 }
             } else {
                 Row::new(vec![Line::from("└ <invalid pane>")]).height(1)

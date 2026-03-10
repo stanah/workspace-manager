@@ -36,18 +36,8 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
 
-    // メインレイアウト: ワークスペース一覧 + ステータスバー
-    let chunks = Layout::vertical([
-        Constraint::Min(5),    // ワークスペース一覧
-        Constraint::Length(1), // ステータスバー
-    ])
-    .split(area);
-
-    // ワークスペース一覧
-    workspace_list::render(frame, chunks[0], state);
-
-    // ステータスバー
-    status_bar::render(frame, chunks[1], state);
+    // ワークスペース一覧（全面表示）
+    workspace_list::render(frame, area, state);
 
     // オーバーレイ
     match &state.view_mode {

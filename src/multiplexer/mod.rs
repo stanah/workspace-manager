@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct PaneInfo {
     pub session_name: String,
     pub window_index: u32,
+    pub pane_index: u32,
     pub window_name: String,
     pub pane_id: String,
     pub cwd: PathBuf,
