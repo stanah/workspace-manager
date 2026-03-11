@@ -188,6 +188,10 @@ pub struct AppState {
     pub git_log_dirty: bool,
     /// フォーカスされているペイン
     pub focused_pane: FocusedPane,
+    /// アクティブペインから追跡しているプロジェクトパス（tmuxペイン切替で更新）
+    pub active_pane_project_path: Option<String>,
+    /// ユーザーが明示的に選択操作したフラグ（キーボード/マウス操作でtrue、ペイン切替でfalse）
+    pub user_selected: bool,
 }
 
 /// コミット詳細情報
@@ -243,7 +247,7 @@ impl AppState {
             favorite_repos: HashSet::new(),
             pending_yazi: None,
             last_yazi_path: None,
-            show_git_log: false,
+            show_git_log: true,
             git_log_cache: None,
             git_log_scroll: 0,
             git_log_area: None,
@@ -251,8 +255,10 @@ impl AppState {
             git_log_show_detail: false,
             git_log_split_ratio: 0.65,
             git_log_dragging: false,
-            git_log_dirty: false,
+            git_log_dirty: true,
             focused_pane: FocusedPane::default(),
+            active_pane_project_path: None,
+            user_selected: false,
         }
     }
 
@@ -775,6 +781,19 @@ impl AppState {
         self.panes = new_panes;
         self.pane_map = new_pane_map;
         self.panes_by_workspace = new_panes_by_workspace;
+
+        // アクティブペインのプロジェクトパスを追跡し、変化時にgit logを更新
+        let new_active_path = self.panes.iter()
+            .find(|p| p.is_active)
+            .and_then(|p| self.workspaces.get(p.workspace_index))
+            .map(|ws| ws.project_path.clone());
+        if new_active_path != self.active_pane_project_path {
+            self.active_pane_project_path = new_active_path;
+            // ユーザーが明示的に選択していない場合のみ、ペイン切替に追従
+            if !self.user_selected {
+                self.invalidate_git_log();
+            }
+        }
     }
 
     /// CWD からワークスペースを最長一致で検索
@@ -940,6 +959,7 @@ impl AppState {
                 new_index -= 1;
             }
             self.set_selected_index(new_index);
+            self.user_selected = true;
         }
     }
 
@@ -954,6 +974,7 @@ impl AppState {
                 new_index += 1;
             }
             self.set_selected_index(new_index);
+            self.user_selected = true;
         }
     }
 
@@ -1213,6 +1234,19 @@ impl AppState {
         }
     }
 
+    /// Git log表示対象のプロジェクトパスを決定
+    ///
+    /// ユーザーが明示的に選択操作した場合はその選択を優先し、
+    /// そうでなければアクティブペインのワークスペースに追従する。
+    pub fn git_log_target_path(&self) -> Option<String> {
+        if self.user_selected {
+            self.selected_project_path()
+        } else {
+            self.active_pane_project_path.clone()
+                .or_else(|| self.selected_project_path())
+        }
+    }
+
     /// 描画前にdirtyなら実際にフェッチ（メインループの描画直前に呼ぶ）
     pub fn flush_git_log(&mut self) {
         if !self.show_git_log || !self.git_log_dirty {
@@ -1220,7 +1254,7 @@ impl AppState {
         }
         self.git_log_dirty = false;
 
-        let path = match self.selected_project_path() {
+        let path = match self.git_log_target_path() {
             Some(p) => p,
             None => {
                 self.git_log_cache = None;

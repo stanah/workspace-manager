@@ -687,24 +687,30 @@ fn run_app(
             match mux.list_all_panes() {
                 Ok(panes) if !panes.is_empty() => {
                     tracing::debug!("Polled {} panes", panes.len());
-                    // アクティブペインのcwd変化を検出してyaziに通知
-                    if yazi_config.enabled {
-                        let prev_active_cwd = state.panes.iter()
-                            .find(|p| p.is_active)
-                            .map(|p| p.cwd.clone());
-                        let new_active_cwd = panes.iter()
-                            .find(|p| p.is_active)
-                            .map(|p| p.cwd.clone());
-                        if new_active_cwd != prev_active_cwd {
-                            if let Some(ref cwd) = new_active_cwd {
-                                if state.last_yazi_path.as_ref() != Some(cwd) {
-                                    state.pending_yazi = Some((
-                                        Instant::now(),
-                                        workspace_manager::app::state::YaziCommand::Reveal(cwd.clone()),
-                                    ));
-                                }
+                    // アクティブペインのcwd変化を検出
+                    let prev_active_cwd = state.panes.iter()
+                        .find(|p| p.is_active)
+                        .map(|p| p.cwd.clone());
+                    let new_active_cwd = panes.iter()
+                        .find(|p| p.is_active)
+                        .map(|p| p.cwd.clone());
+                    let active_pane_changed = new_active_cwd != prev_active_cwd;
+
+                    // yaziに通知
+                    if yazi_config.enabled && active_pane_changed {
+                        if let Some(ref cwd) = new_active_cwd {
+                            if state.last_yazi_path.as_ref() != Some(cwd) {
+                                state.pending_yazi = Some((
+                                    Instant::now(),
+                                    workspace_manager::app::state::YaziCommand::Reveal(cwd.clone()),
+                                ));
                             }
                         }
+                    }
+
+                    // ペイン切替時はユーザー選択をリセットしてペイン追従モードに戻す
+                    if active_pane_changed {
+                        state.user_selected = false;
                     }
                     state.update_panes(&panes);
                     state.rebuild_tree_with_manager(Some(worktree_manager));
@@ -1685,6 +1691,7 @@ fn handle_action(
             let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
+                state.user_selected = true;
                 state.invalidate_git_log();
                 // ペイン行クリックでそのペインにフォーカス
                 if state.selected_pane().is_some() {
@@ -1696,6 +1703,7 @@ fn handle_action(
             let index = row as usize + state.table_state.offset();
             if index < state.tree_item_count() {
                 state.set_selected_index(index);
+                state.user_selected = true;
                 state.invalidate_git_log();
             }
             handle_action(state, mux, config, _worktree_manager, Action::Select)?;
