@@ -72,15 +72,25 @@ fn extract_worktree_info(path: &Path) -> Option<WorktreeInfo> {
     let repo = Repository::open(path).ok()?;
 
     // リポジトリ名を取得
-    // worktreeの場合、ディレクトリ名が "repo__branch" 形式になっている可能性がある
     let dir_name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    // "__" 区切りの場合はベースリポジトリ名を抽出
     let repo_name = if let Some(idx) = dir_name.find("__") {
+        // Parallel スタイル: "repo__branch" 形式
         dir_name[..idx].to_string()
+    } else if repo.is_worktree() {
+        // Subdirectory スタイル: .git ファイルの gitdir から元リポジトリ名を取得
+        // gitdir は "{repo}/.git/worktrees/{name}" を指す
+        repo.path()
+            .ancestors()
+            .find(|p| p.file_name().map_or(false, |n| n == ".git"))
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or(dir_name)
+            .to_string()
     } else {
         dir_name.to_string()
     };
